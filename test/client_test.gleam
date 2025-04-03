@@ -7,6 +7,7 @@ pub fn client_test() {
 
   nats
   |> nuts_client.publish_bits("foo", <<"hello">>)
+  |> should.be_ok
 
   let me = process.new_subject()
   nats
@@ -17,6 +18,7 @@ pub fn client_test() {
 
   nats
   |> nuts_client.publish_bits("foo", <<"world">>)
+  |> should.be_ok
 
   process.receive(me, 500)
   |> should.be_ok

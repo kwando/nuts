@@ -3,7 +3,6 @@ import gleam/dict
 import gleam/erlang/process
 import gleam/function
 import gleam/int
-import gleam/io
 import gleam/option
 import gleam/otp/actor
 import gleam/result
@@ -42,7 +41,11 @@ type State {
 pub opaque type Message {
   Reconnect
   Data(mug.TcpMessage)
-  Publish(topic: String, payload: BitArray, reply: process.Subject(Nil))
+  Publish(
+    topic: String,
+    payload: BitArray,
+    reply: process.Subject(Result(Nil, Nil)),
+  )
   Subscribe(topic: String, callback: Callback)
   Shutdown
 }
@@ -82,12 +85,10 @@ fn handle_message(msg, state: State) {
               |> actor.continue
             }
             mug.SocketClosed(_) -> {
-              io.println("SOCKET CLOSED")
               process.send_after(state.self, 3000, Reconnect)
               actor.continue(disconnect(state))
             }
             mug.TcpError(_, _) -> {
-              io.println("SOCKET ERROR")
               process.send_after(state.self, 3000, Reconnect)
               actor.continue(disconnect(state))
             }
@@ -95,12 +96,10 @@ fn handle_message(msg, state: State) {
         }
         Reconnect -> panic
         Publish(topic:, payload:, reply:) -> {
-          process.send(reply, Nil)
-          actor.continue(tcp_send(
-            state,
-            protocol.Pub(topic:, payload:),
-            function.identity,
-          ))
+          let updated_state =
+            tcp_send(state, protocol.Pub(topic:, payload:), function.identity)
+          process.send(reply, Ok(Nil))
+          actor.continue(updated_state)
         }
         Subscribe(topic, callback) -> {
           let #(sid, updated_state) =
@@ -123,13 +122,11 @@ fn handle_message(msg, state: State) {
     Disconnected(..) -> {
       case msg {
         Reconnect -> {
-          io.println("setup connection")
           case setup_connection(state.config) {
             Ok(socket) -> {
               mug.receive_next_packet_as_message(socket)
               case resubscribe(socket, state.subscribers) {
                 Ok(socket) -> {
-                  io.println("connection success")
                   Connected(
                     config: state.config,
                     socket:,
@@ -228,10 +225,7 @@ fn dispatch_message(state: State, sid, topic, headers, payload) {
       let assert Ok(Nil) = subscription.callback(topic, headers, payload)
       state
     }
-    Error(_) -> {
-      io.println_error("GOT MSG FOR CLIENT WITHOUT CALLBACK")
-      state
-    }
+    Error(_) -> state
   }
 }
 
