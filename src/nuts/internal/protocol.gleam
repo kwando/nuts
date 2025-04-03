@@ -5,7 +5,7 @@ import gleam/option
 import gleam/string
 import nuts/connect_options
 
-pub type ClientMessages {
+pub type Command {
   Connect(List(connect_options.ConnectOption))
   Sub(topic: String, sid: String, queue_group: option.Option(String))
   Pub(topic: String, payload: BitArray)
@@ -38,8 +38,8 @@ pub type ProtocolReadResult {
   NeedsMoreData
 }
 
-pub fn to_string(client_message: ClientMessages) {
-  case client_message {
+pub fn cmd_to_bits(cmd: Command) {
+  case cmd {
     Connect(data) -> <<"CONNECT ", connect_options.to_json(data):utf8, "\r\n">>
     ClientPing -> <<"PING\r\n">>
     ClientPong -> <<"PONG\r\n">>

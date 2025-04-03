@@ -110,7 +110,7 @@ fn handle_message(msg, state: State) {
             mug.send(
               state.socket,
               protocol.Sub(topic:, sid:, queue_group: option.None)
-                |> protocol.to_string,
+                |> protocol.cmd_to_bits,
             )
           {
             Ok(Nil) -> actor.continue(updated_state)
@@ -262,12 +262,12 @@ fn resubscribe(socket: mug.Socket, subscribers: dict.Dict(String, Subscription))
 
 fn tcp_send(
   state: State,
-  data: protocol.ClientMessages,
+  data: protocol.Command,
   update_state: fn(State) -> State,
 ) {
   case state {
     Connected(socket:, ..) -> {
-      case mug.send(socket, protocol.to_string(data)) {
+      case mug.send(socket, protocol.cmd_to_bits(data)) {
         Ok(Nil) -> update_state(state)
         Error(_) -> disconnect(state)
       }
