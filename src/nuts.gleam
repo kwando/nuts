@@ -10,8 +10,8 @@ import mug
 import nuts/connect_options
 import nuts/internal/protocol
 
-pub type Config {
-  Config(host: String, port: Int)
+pub opaque type Config {
+  Config(host: String, port: Int, retry_interval: Int)
 }
 
 type Subscription {
@@ -21,10 +21,13 @@ type Subscription {
 type Callback =
   fn(String, List(#(String, String)), BitArray) -> Result(Nil, Nil)
 
+type Subscribers =
+  dict.Dict(String, Subscription)
+
 type State {
   Connected(
     config: Config,
-    subscribers: dict.Dict(String, Subscription),
+    subscribers: Subscribers,
     socket: mug.Socket,
     next_sid: Int,
     buffer: BitArray,
@@ -32,14 +35,14 @@ type State {
   )
   Disconnected(
     config: Config,
-    subscribers: dict.Dict(String, Subscription),
+    subscribers: Subscribers,
     self: process.Subject(Message),
     next_sid: Int,
   )
 }
 
 pub opaque type Message {
-  Reconnect
+  Connect
   Data(mug.TcpMessage)
   Publish(
     topic: String,
@@ -49,6 +52,10 @@ pub opaque type Message {
   Subscribe(topic: String, callback: Callback)
   IsConnected(process.Subject(Bool))
   Shutdown
+}
+
+pub fn new(host: String, port: Int) {
+  Config(host:, port:, retry_interval: 1000)
 }
 
 pub fn start(config: Config) {
@@ -62,7 +69,7 @@ pub fn start(config: Config) {
 
       let state = Disconnected(config, dict.new(), self: subject, next_sid: 1)
 
-      process.send(subject, Reconnect)
+      process.send(subject, Connect)
       actor.Ready(selector:, state:)
     },
     init_timeout: 1000,
@@ -86,16 +93,24 @@ fn handle_message(msg, state: State) {
               |> actor.continue
             }
             mug.SocketClosed(_) -> {
-              process.send_after(state.self, 3000, Reconnect)
+              process.send_after(
+                state.self,
+                state.config.retry_interval,
+                Connect,
+              )
               actor.continue(disconnect(state))
             }
             mug.TcpError(_, _) -> {
-              process.send_after(state.self, 3000, Reconnect)
+              process.send_after(
+                state.self,
+                state.config.retry_interval,
+                Connect,
+              )
               actor.continue(disconnect(state))
             }
           }
         }
-        Reconnect -> panic
+        Connect -> panic
         Publish(topic:, payload:, reply:) -> {
           let updated_state =
             tcp_send(state, protocol.Pub(topic:, payload:), function.identity)
@@ -126,7 +141,7 @@ fn handle_message(msg, state: State) {
     }
     Disconnected(..) -> {
       case msg {
-        Reconnect -> {
+        Connect -> {
           case setup_connection(state.config) {
             Ok(socket) -> {
               mug.receive_next_packet_as_message(socket)
@@ -148,7 +163,11 @@ fn handle_message(msg, state: State) {
               }
             }
             Error(_) -> {
-              process.send_after(state.self, 3000, Reconnect)
+              process.send_after(
+                state.self,
+                state.config.retry_interval,
+                Connect,
+              )
               actor.continue(state)
             }
           }
@@ -169,23 +188,6 @@ fn handle_message(msg, state: State) {
         }
       }
     }
-  }
-}
-
-fn register_subscriber(state: State, topic, callback) {
-  let sid = state.next_sid |> int.to_string
-  let subscribers =
-    dict.insert(state.subscribers, sid, Subscription(topic, callback))
-
-  case state {
-    Connected(..) -> #(
-      sid,
-      Connected(..state, next_sid: state.next_sid + 1, subscribers:),
-    )
-    Disconnected(..) -> #(
-      sid,
-      Disconnected(..state, next_sid: state.next_sid + 1, subscribers:),
-    )
   }
 }
 
@@ -235,8 +237,10 @@ fn handler_server_message(state, msg) {
 fn dispatch_message(state: State, sid, topic, headers, payload) {
   case dict.get(state.subscribers, sid) {
     Ok(subscription) -> {
-      let assert Ok(Nil) = subscription.callback(topic, headers, payload)
-      state
+      case subscription.callback(topic, headers, payload) {
+        Ok(_) -> state
+        Error(_) -> update_subscribers(state, dict.delete(_, sid))
+      }
     }
     Error(_) -> state
   }
@@ -247,6 +251,15 @@ fn disconnect(state: State) {
     Connected(subscribers:, config:, self:, next_sid:, ..) ->
       Disconnected(subscribers:, config:, self:, next_sid:)
     Disconnected(..) -> state
+  }
+}
+
+fn update_subscribers(state: State, update: fn(Subscribers) -> Subscribers) {
+  case state {
+    Connected(subscribers:, ..) ->
+      Connected(..state, subscribers: update(subscribers))
+    Disconnected(subscribers:, ..) ->
+      Disconnected(..state, subscribers: update(subscribers))
   }
 }
 
@@ -264,6 +277,20 @@ fn resubscribe(socket: mug.Socket, subscribers: dict.Dict(String, Subscription))
       |> result.replace(socket)
     }
     Error(err) -> Error(err)
+  }
+}
+
+fn register_subscriber(state: State, topic, callback) {
+  let sid = state.next_sid |> int.to_string
+  let state =
+    update_subscribers(state, dict.insert(_, sid, Subscription(topic, callback)))
+
+  case state {
+    Connected(..) -> #(sid, Connected(..state, next_sid: state.next_sid + 1))
+    Disconnected(..) -> #(
+      sid,
+      Disconnected(..state, next_sid: state.next_sid + 1),
+    )
   }
 }
 

@@ -3,7 +3,7 @@ import gleeunit/should
 import nuts
 
 pub fn client_test() {
-  let assert Ok(nats) = nuts.start(nuts.Config("127.0.0.1", 6789))
+  let assert Ok(nats) = nuts.new("127.0.0.1", 6789) |> nuts.start()
   nats
   |> nuts.is_connected()
   |> should.equal(True)
@@ -32,7 +32,7 @@ pub fn client_test() {
 }
 
 pub fn disconnected_client_test() {
-  let assert Ok(nats) = nuts.start(nuts.Config("127.0.0.1", 35_268))
+  let assert Ok(nats) = nuts.start(nuts.new("127.0.0.1", 24_823))
 
   nats
   |> nuts.is_connected()
