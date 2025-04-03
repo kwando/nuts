@@ -47,6 +47,7 @@ pub opaque type Message {
     reply: process.Subject(Result(Nil, Nil)),
   )
   Subscribe(topic: String, callback: Callback)
+  IsConnected(process.Subject(Bool))
   Shutdown
 }
 
@@ -117,6 +118,10 @@ fn handle_message(msg, state: State) {
           }
         }
         Shutdown -> actor.Stop(process.Normal)
+        IsConnected(reply) -> {
+          process.send(reply, True)
+          actor.continue(state)
+        }
       }
     }
     Disconnected(..) -> {
@@ -153,7 +158,15 @@ fn handle_message(msg, state: State) {
           actor.continue(state)
         }
         Shutdown -> actor.Stop(process.Normal)
-        _ -> actor.continue(state)
+        IsConnected(reply) -> {
+          process.send(reply, False)
+          actor.continue(state)
+        }
+        Data(_) -> actor.continue(state)
+        Publish(reply:, ..) -> {
+          process.send(reply, Error(Nil))
+          actor.continue(state)
+        }
       }
     }
   }
@@ -290,4 +303,8 @@ pub fn subscribe(
 
 pub fn shutdown(subject: process.Subject(Message)) {
   actor.send(subject, Shutdown)
+}
+
+pub fn is_connected(subject: process.Subject(Message)) {
+  actor.call(subject, IsConnected, 5000)
 }
