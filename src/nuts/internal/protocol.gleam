@@ -91,7 +91,7 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
 
           case string.split(line, " ") {
             [topic, sid, byte_size] -> {
-              let assert Ok(byte_size) = int.parse(byte_size)
+              use byte_size <- with_int(byte_size)
               case read_body(rest, <<>>, byte_size) {
                 BodyReadSuccess(payload, rest) -> {
                   Continue(
@@ -104,7 +104,7 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
               }
             }
             [topic, sid, reply_to, byte_size] -> {
-              let assert Ok(byte_size) = int.parse(byte_size)
+              use byte_size <- with_int(byte_size)
               case read_body(rest, <<>>, byte_size) {
                 BodyReadSuccess(payload, rest) -> {
                   Continue(
@@ -129,8 +129,8 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
           let assert Ok(line) = bit_array.to_string(line)
           case string.split(line, " ") {
             [topic, sid, header_bytes, total_bytes] -> {
-              let assert Ok(header_bytes) = int.parse(header_bytes)
-              let assert Ok(total_bytes) = int.parse(total_bytes)
+              use header_bytes <- with_int(header_bytes)
+              use total_bytes <- with_int(total_bytes)
 
               case read_body(rest, <<>>, header_bytes - 2) {
                 BodyReadSuccess(headers, rest) -> {
@@ -166,6 +166,16 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
     }
     <<>> -> NeedsMoreData
     msg -> ProtocolError("unhandled protocol message: " <> string.inspect(msg))
+  }
+}
+
+fn with_int(
+  input: String,
+  callback: fn(Int) -> ProtocolReadResult,
+) -> ProtocolReadResult {
+  case int.parse(input) {
+    Error(_) -> ProtocolError("bad integer")
+    Ok(value) -> callback(value)
   }
 }
 

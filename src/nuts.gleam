@@ -19,10 +19,14 @@ type Subscription {
 }
 
 type Callback =
-  fn(String, List(#(String, String)), BitArray) -> Result(Nil, Nil)
+  fn(Event) -> Result(Nil, Nil)
 
 type Subscribers =
   dict.Dict(String, Subscription)
+
+pub type Event {
+  Message(topic: String, headers: List(#(String, String)), payload: BitArray)
+}
 
 type State {
   Connected(
@@ -31,17 +35,17 @@ type State {
     socket: mug.Socket,
     next_sid: Int,
     buffer: BitArray,
-    self: process.Subject(Message),
+    self: process.Subject(Msg),
   )
   Disconnected(
     config: Config,
     subscribers: Subscribers,
-    self: process.Subject(Message),
+    self: process.Subject(Msg),
     next_sid: Int,
   )
 }
 
-pub opaque type Message {
+pub opaque type Msg {
   Connect
   Data(mug.TcpMessage)
   Publish(
@@ -237,7 +241,7 @@ fn handler_server_message(state, msg) {
 fn dispatch_message(state: State, sid, topic, headers, payload) {
   case dict.get(state.subscribers, sid) {
     Ok(subscription) -> {
-      case subscription.callback(topic, headers, payload) {
+      case subscription.callback(Message(topic, headers, payload)) {
         Ok(_) -> state
         Error(_) -> update_subscribers(state, dict.delete(_, sid))
       }
@@ -316,22 +320,22 @@ fn setup_connection(config: Config) {
 }
 
 // -------------------------------- [ PUBLIC API ] --------------------------------------
-pub fn publish_bits(subject: process.Subject(Message), topic, payload) {
+pub fn publish_bits(subject: process.Subject(Msg), topic, payload) {
   actor.call(subject, Publish(topic:, payload:, reply: _), 5000)
 }
 
 pub fn subscribe(
-  subject: process.Subject(Message),
+  subject: process.Subject(Msg),
   topic: String,
   callback: Callback,
 ) {
   actor.send(subject, Subscribe(topic, callback))
 }
 
-pub fn shutdown(subject: process.Subject(Message)) {
+pub fn shutdown(subject: process.Subject(Msg)) {
   actor.send(subject, Shutdown)
 }
 
-pub fn is_connected(subject: process.Subject(Message)) {
+pub fn is_connected(subject: process.Subject(Msg)) {
   actor.call(subject, IsConnected, 5000)
 }

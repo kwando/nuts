@@ -14,8 +14,8 @@ pub fn client_test() {
 
   let me = process.new_subject()
   nats
-  |> nuts.subscribe(">", fn(topic, headers, payload) {
-    process.send(me, #(topic, headers, payload))
+  |> nuts.subscribe(">", fn(event) {
+    process.send(me, event)
     Ok(Nil)
   })
 
@@ -25,7 +25,7 @@ pub fn client_test() {
 
   process.receive(me, 500)
   |> should.be_ok
-  |> should.equal(#("foo", [], <<"world">>))
+  |> should.equal(nuts.Message("foo", [], <<"world">>))
 
   nats
   |> nuts.shutdown()
@@ -43,7 +43,7 @@ pub fn disconnected_client_test() {
   |> should.be_error
 
   nats
-  |> nuts.subscribe("foo", fn(_msg, _headers, _body) { Ok(Nil) })
+  |> nuts.subscribe("foo", fn(_event) { Ok(Nil) })
 
   nats
   |> nuts.publish_bits("foo", <<"hello">>)
