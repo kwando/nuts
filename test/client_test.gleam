@@ -1,23 +1,23 @@
 import gleam/erlang/process
 import gleeunit/should
-import nuts_client
+import nuts
 
 pub fn client_test() {
-  let assert Ok(nats) = nuts_client.start(nuts_client.Config("127.0.0.1", 6789))
+  let assert Ok(nats) = nuts.start(nuts.Config("127.0.0.1", 6789))
 
   nats
-  |> nuts_client.publish_bits("foo", <<"hello">>)
+  |> nuts.publish_bits("foo", <<"hello">>)
   |> should.be_ok
 
   let me = process.new_subject()
   nats
-  |> nuts_client.subscribe(">", fn(topic, headers, payload) {
+  |> nuts.subscribe(">", fn(topic, headers, payload) {
     process.send(me, #(topic, headers, payload))
     Ok(Nil)
   })
 
   nats
-  |> nuts_client.publish_bits("foo", <<"world">>)
+  |> nuts.publish_bits("foo", <<"world">>)
   |> should.be_ok
 
   process.receive(me, 500)
@@ -25,5 +25,5 @@ pub fn client_test() {
   |> should.equal(#("foo", [], <<"world">>))
 
   nats
-  |> nuts_client.shutdown()
+  |> nuts.shutdown()
 }
