@@ -1,0 +1,11 @@
+// Static tasks configuration.
+//
+// Example:
+[
+  {
+    "label": "Nats Server",
+    "command": "nats-server --port 6789",
+    "allow_concurrent_runs": false,
+    "use_new_terminal": true
+  }
+]
