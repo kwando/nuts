@@ -11,7 +11,7 @@ import nuts/connect_options
 import nuts/internal/protocol
 
 pub opaque type Config {
-  Config(host: String, port: Int, retry_interval: Int)
+  Config(host: String, port: Int, retry_interval: Int, ping_interval: Int)
 }
 
 type Subscription {
@@ -56,10 +56,11 @@ pub opaque type Msg {
   Subscribe(topic: String, callback: Callback)
   IsConnected(process.Subject(Bool))
   Shutdown
+  Ping
 }
 
 pub fn new(host: String, port: Int) {
-  Config(host:, port:, retry_interval: 1000)
+  Config(host:, port:, retry_interval: 1000, ping_interval: 2000)
 }
 
 pub fn start(config: Config) {
@@ -121,7 +122,7 @@ fn handle_message(state: State, msg: Msg) {
         Publish(topic:, payload:, reply:) -> {
           let updated_state =
             tcp_send(state, protocol.Pub(topic:, payload:), function.identity)
-          process.send(reply, Ok(Nil))
+          actor.send(reply, Ok(Nil))
           actor.continue(updated_state)
         }
         Subscribe(topic, callback) -> {
@@ -144,6 +145,14 @@ fn handle_message(state: State, msg: Msg) {
           process.send(reply, True)
           actor.continue(state)
         }
+        Ping -> {
+          case
+            mug.send(state.socket, protocol.cmd_to_bits(protocol.ClientPing))
+          {
+            Ok(Nil) -> actor.continue(state)
+            Error(_) -> actor.continue(disconnect(state))
+          }
+        }
       }
     }
     Disconnected(..) -> {
@@ -154,19 +163,22 @@ fn handle_message(state: State, msg: Msg) {
               mug.receive_next_packet_as_message(socket)
               case resubscribe(socket, state.subscribers) {
                 Ok(socket) -> {
-                  Connected(
-                    config: state.config,
-                    socket:,
-                    buffer: <<>>,
-                    next_sid: 1,
-                    subscribers: state.subscribers,
-                    self: state.self,
-                  )
+                  let state =
+                    Connected(
+                      config: state.config,
+                      socket:,
+                      buffer: <<>>,
+                      next_sid: 1,
+                      subscribers: state.subscribers,
+                      self: state.self,
+                    )
+
+                  state
+                  |> schedule_ping()
+                  |> result.unwrap_both
                   |> actor.continue
                 }
-                Error(_err) -> {
-                  actor.continue(state)
-                }
+                Error(_err) -> actor.continue(state)
               }
             }
             Error(_) -> {
@@ -193,15 +205,28 @@ fn handle_message(state: State, msg: Msg) {
           process.send(reply, Error(Nil))
           actor.continue(state)
         }
+        Ping -> actor.continue(state)
       }
     }
+  }
+}
+
+fn schedule_ping(state: State) {
+  case state {
+    Connected(socket:, ..) -> {
+      case mug.send(socket, protocol.cmd_to_bits(protocol.ClientPing)) {
+        Ok(Nil) -> Ok(state)
+        Error(_) -> Ok(disconnect(state))
+      }
+    }
+    Disconnected(..) -> state |> Ok
   }
 }
 
 fn read_protocol_messages(state: State, buffer: BitArray) -> Result(State, Nil) {
   case protocol.parse(buffer) {
     protocol.Continue(msg, buffer) ->
-      read_protocol_messages(handler_server_message(state, msg), buffer)
+      read_protocol_messages(handle_server_message(state, msg), buffer)
     protocol.NeedsMoreData -> {
       case state {
         Connected(..) -> Ok(Connected(..state, buffer: buffer))
@@ -212,7 +237,7 @@ fn read_protocol_messages(state: State, buffer: BitArray) -> Result(State, Nil) 
   }
 }
 
-fn handler_server_message(state, msg) {
+fn handle_server_message(state, msg) {
   case msg {
     protocol.Info(..) -> {
       use _ <- tcp_send(
@@ -231,7 +256,17 @@ fn handler_server_message(state, msg) {
       use _ <- tcp_send(state, protocol.ClientPong)
       state
     }
-    protocol.Pong -> state
+    protocol.Pong -> {
+      case state {
+        Connected(config:, self:, ..) -> {
+          process.send_after(self, config.ping_interval, Ping)
+          Nil
+        }
+        Disconnected(..) -> Nil
+      }
+
+      state
+    }
     protocol.Msg(topic:, payload:, sid:, ..) -> {
       state |> dispatch_message(sid, topic, [], payload)
     }
