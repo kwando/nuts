@@ -14,10 +14,13 @@ version = "1.0.0"
 
 [dependencies]
 gleam_stdlib = ">= 0.44.0 and < 2.0.0"
-mug = ">= 1.2.0 and < 2.0.0"
-gleam_json = ">= 2.3.0 and < 3.0.0"
-gleam_erlang = ">= 0.33.0 and < 1.0.0"
-gleam_otp = ">= 0.16.1 and < 1.0.0"
+mug = ">= 3.0.0 and < 4.0.0"
+gleam_json = ">= 3.0.0 and < 4.0.0"
+gleam_erlang = ">= 1.2.0 and < 2.0.0"
+gleam_otp = ">= 1.0.0 and < 2.0.0"
+
 
 [dev-dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
+cog = ">= 2.0.3 and < 3.0.0"
+gleam_community_ansi = ">= 1.4.3 and < 2.0.0"

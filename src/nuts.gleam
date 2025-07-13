@@ -63,25 +63,28 @@ pub fn new(host: String, port: Int) {
 }
 
 pub fn start(config: Config) {
-  actor.start_spec(actor.Spec(
-    init: fn() {
-      let subject = process.new_subject()
-      let selector =
-        process.new_selector()
-        |> process.selecting(subject, function.identity)
-        |> mug.selecting_tcp_messages(Data)
-
-      let state = Disconnected(config, dict.new(), self: subject, next_sid: 1)
-
-      process.send(subject, Connect)
-      actor.Ready(selector:, state:)
-    },
-    init_timeout: 1000,
-    loop: handle_message,
-  ))
+  actor.new_with_initialiser(1000, fn(subject) {
+    actor.send(subject, Connect)
+    actor.initialised(Disconnected(
+      config,
+      dict.new(),
+      self: subject,
+      next_sid: 1,
+    ))
+    |> actor.selecting(
+      process.new_selector()
+      |> mug.select_tcp_messages(Data)
+      |> process.select(subject),
+    )
+    |> actor.returning(subject)
+    |> Ok
+  })
+  |> actor.on_message(handle_message)
+  |> actor.start()
+  |> result.map(fn(started) { started.data })
 }
 
-fn handle_message(msg, state: State) {
+fn handle_message(state: State, msg: Msg) {
   case state {
     Connected(..) as state -> {
       case msg {
@@ -136,7 +139,7 @@ fn handle_message(msg, state: State) {
             Error(_) -> actor.continue(disconnect(state))
           }
         }
-        Shutdown -> actor.Stop(process.Normal)
+        Shutdown -> actor.stop()
         IsConnected(reply) -> {
           process.send(reply, True)
           actor.continue(state)
@@ -180,7 +183,7 @@ fn handle_message(msg, state: State) {
           let #(_sid, state) = register_subscriber(state, topic, callback)
           actor.continue(state)
         }
-        Shutdown -> actor.Stop(process.Normal)
+        Shutdown -> actor.stop()
         IsConnected(reply) -> {
           process.send(reply, False)
           actor.continue(state)
@@ -321,7 +324,7 @@ fn setup_connection(config: Config) {
 
 // -------------------------------- [ PUBLIC API ] --------------------------------------
 pub fn publish_bits(subject: process.Subject(Msg), topic, payload) {
-  actor.call(subject, Publish(topic:, payload:, reply: _), 5000)
+  actor.call(subject, 5000, Publish(topic:, payload:, reply: _))
 }
 
 pub fn subscribe(
@@ -337,5 +340,5 @@ pub fn shutdown(subject: process.Subject(Msg)) {
 }
 
 pub fn is_connected(subject: process.Subject(Msg)) {
-  actor.call(subject, IsConnected, 5000)
+  actor.call(subject, 5000, IsConnected)
 }
