@@ -29,19 +29,13 @@ pub type Event {
 }
 
 type State {
-  Connected(
+  State(
     config: Config,
     subscribers: Subscribers,
-    socket: mug.Socket,
+    socket: option.Option(mug.Socket),
     next_sid: Int,
     buffer: BitArray,
     self: process.Subject(Msg),
-  )
-  Disconnected(
-    config: Config,
-    subscribers: Subscribers,
-    self: process.Subject(Msg),
-    next_sid: Int,
   )
 }
 
@@ -66,12 +60,16 @@ pub fn new(host: String, port: Int) {
 pub fn start(config: Config) {
   actor.new_with_initialiser(1000, fn(subject) {
     actor.send(subject, Connect)
-    actor.initialised(Disconnected(
-      config,
-      dict.new(),
-      self: subject,
-      next_sid: 1,
-    ))
+    actor.initialised(
+      State(
+        config,
+        dict.new(),
+        self: subject,
+        next_sid: 1,
+        socket: option.None,
+        buffer: <<>>,
+      ),
+    )
     |> actor.selecting(
       process.new_selector()
       |> mug.select_tcp_messages(Data)
@@ -87,10 +85,10 @@ pub fn start(config: Config) {
 
 fn handle_message(state: State, msg: Msg) {
   case state {
-    Connected(..) as state -> {
+    State(socket: option.Some(socket), ..) as state -> {
       case msg {
         Data(tcp) -> {
-          mug.receive_next_packet_as_message(state.socket)
+          mug.receive_next_packet_as_message(socket)
           case tcp {
             mug.Packet(_socket, data) -> {
               let buffer = bit_array.append(state.buffer, data)
@@ -131,7 +129,7 @@ fn handle_message(state: State, msg: Msg) {
 
           case
             mug.send(
-              state.socket,
+              socket,
               protocol.Sub(topic:, sid:, queue_group: option.None)
                 |> protocol.cmd_to_bits,
             )
@@ -146,16 +144,14 @@ fn handle_message(state: State, msg: Msg) {
           actor.continue(state)
         }
         Ping -> {
-          case
-            mug.send(state.socket, protocol.cmd_to_bits(protocol.ClientPing))
-          {
+          case mug.send(socket, protocol.cmd_to_bits(protocol.ClientPing)) {
             Ok(Nil) -> actor.continue(state)
             Error(_) -> actor.continue(disconnect(state))
           }
         }
       }
     }
-    Disconnected(..) -> {
+    State(..) -> {
       case msg {
         Connect -> {
           case setup_connection(state.config) {
@@ -163,17 +159,14 @@ fn handle_message(state: State, msg: Msg) {
               mug.receive_next_packet_as_message(socket)
               case resubscribe(socket, state.subscribers) {
                 Ok(socket) -> {
-                  let state =
-                    Connected(
-                      config: state.config,
-                      socket:,
-                      buffer: <<>>,
-                      next_sid: 1,
-                      subscribers: state.subscribers,
-                      self: state.self,
-                    )
-
-                  state
+                  State(
+                    config: state.config,
+                    socket: option.Some(socket),
+                    buffer: <<>>,
+                    next_sid: 1,
+                    subscribers: state.subscribers,
+                    self: state.self,
+                  )
                   |> schedule_ping()
                   |> result.unwrap_both
                   |> actor.continue
@@ -212,14 +205,13 @@ fn handle_message(state: State, msg: Msg) {
 }
 
 fn schedule_ping(state: State) {
-  case state {
-    Connected(socket:, ..) -> {
+  case state.socket {
+    option.None -> Ok(state)
+    option.Some(socket) ->
       case mug.send(socket, protocol.cmd_to_bits(protocol.ClientPing)) {
         Ok(Nil) -> Ok(state)
         Error(_) -> Ok(disconnect(state))
       }
-    }
-    Disconnected(..) -> state |> Ok
   }
 }
 
@@ -227,12 +219,7 @@ fn read_protocol_messages(state: State, buffer: BitArray) -> Result(State, Nil) 
   case protocol.parse(buffer) {
     protocol.Continue(msg, buffer) ->
       read_protocol_messages(handle_server_message(state, msg), buffer)
-    protocol.NeedsMoreData -> {
-      case state {
-        Connected(..) -> Ok(Connected(..state, buffer: buffer))
-        _ -> Ok(state)
-      }
-    }
+    protocol.NeedsMoreData -> Ok(State(..state, buffer: buffer))
     protocol.ProtocolError(..) -> Error(Nil)
   }
 }
@@ -257,12 +244,14 @@ fn handle_server_message(state, msg) {
       state
     }
     protocol.Pong -> {
-      case state {
-        Connected(config:, self:, ..) -> {
-          process.send_after(self, config.ping_interval, Ping)
+      case state.socket {
+        option.None -> {
           Nil
         }
-        Disconnected(..) -> Nil
+        option.Some(_socket) -> {
+          process.send_after(state.self, state.config.ping_interval, Ping)
+          Nil
+        }
       }
 
       state
@@ -289,20 +278,16 @@ fn dispatch_message(state: State, sid, topic, headers, payload) {
 }
 
 fn disconnect(state: State) {
-  case state {
-    Connected(subscribers:, config:, self:, next_sid:, ..) ->
-      Disconnected(subscribers:, config:, self:, next_sid:)
-    Disconnected(..) -> state
+  case state.socket {
+    option.None -> state
+    option.Some(_) -> {
+      State(..state, socket: option.None, buffer: <<>>)
+    }
   }
 }
 
 fn update_subscribers(state: State, update: fn(Subscribers) -> Subscribers) {
-  case state {
-    Connected(subscribers:, ..) ->
-      Connected(..state, subscribers: update(subscribers))
-    Disconnected(subscribers:, ..) ->
-      Disconnected(..state, subscribers: update(subscribers))
-  }
+  State(..state, subscribers: update(state.subscribers))
 }
 
 fn resubscribe(socket: mug.Socket, subscribers: dict.Dict(String, Subscription)) {
@@ -327,13 +312,7 @@ fn register_subscriber(state: State, topic, callback) {
   let state =
     update_subscribers(state, dict.insert(_, sid, Subscription(topic, callback)))
 
-  case state {
-    Connected(..) -> #(sid, Connected(..state, next_sid: state.next_sid + 1))
-    Disconnected(..) -> #(
-      sid,
-      Disconnected(..state, next_sid: state.next_sid + 1),
-    )
-  }
+  #(sid, State(..state, next_sid: state.next_sid + 1))
 }
 
 fn tcp_send(
@@ -341,14 +320,14 @@ fn tcp_send(
   data: protocol.Command,
   update_state: fn(State) -> State,
 ) {
-  case state {
-    Connected(socket:, ..) -> {
+  case state.socket {
+    option.Some(socket) -> {
       case mug.send(socket, protocol.cmd_to_bits(data)) {
         Ok(Nil) -> update_state(state)
         Error(_) -> disconnect(state)
       }
     }
-    Disconnected(..) -> state
+    option.None -> state
   }
 }
 
