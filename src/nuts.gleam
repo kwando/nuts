@@ -168,7 +168,6 @@ fn handle_message(state: State, msg: Msg) {
                     self: state.self,
                   )
                   |> schedule_ping()
-                  |> result.unwrap_both
                   |> actor.continue
                 }
                 Error(_err) -> actor.continue(state)
@@ -206,11 +205,11 @@ fn handle_message(state: State, msg: Msg) {
 
 fn schedule_ping(state: State) {
   case state.socket {
-    option.None -> Ok(state)
+    option.None -> state
     option.Some(socket) ->
       case mug.send(socket, protocol.cmd_to_bits(protocol.ClientPing)) {
-        Ok(Nil) -> Ok(state)
-        Error(_) -> Ok(disconnect(state))
+        Ok(Nil) -> state
+        Error(_) -> disconnect(state)
       }
   }
 }
