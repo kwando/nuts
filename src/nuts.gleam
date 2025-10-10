@@ -5,7 +5,7 @@ import gleam/erlang/reference.{type Reference}
 import gleam/function
 import gleam/int
 import gleam/io
-import gleam/option.{None, Some}
+import gleam/option.{None}
 import gleam/otp/actor
 import gleam/result
 import mug
@@ -36,13 +36,14 @@ pub type Event {
   Message(topic: String, headers: List(#(String, String)), payload: BitArray)
 }
 
+type PingState {
+  PingSent(Reference)
+  PingIdle
+}
+
 type ConnectionState {
   Disconnected
-  Connected(
-    socket: mug.Socket,
-    buffer: BitArray,
-    ping_ref: option.Option(Reference),
-  )
+  Connected(socket: mug.Socket, buffer: BitArray, ping: PingState)
 }
 
 type State {
@@ -172,7 +173,7 @@ fn handle_message(state: State, msg: Msg) {
               actor.continue(
                 State(
                   ..state,
-                  conn: Connected(..conn, ping_ref: Some(ping_ref)),
+                  conn: Connected(..conn, ping: PingSent(ping_ref)),
                 ),
               )
             }
@@ -180,27 +181,27 @@ fn handle_message(state: State, msg: Msg) {
           }
         }
         GotPong(ref) -> {
-          case conn.ping_ref {
-            Some(ping_ref) if ping_ref == ref -> {
+          case conn.ping {
+            PingSent(ping_ref) if ping_ref == ref -> {
               process.send_after(
                 state.self,
                 state.config.ping_interval,
                 SendPing,
               )
               actor.continue(
-                State(..state, conn: Connected(..conn, ping_ref: None)),
+                State(..state, conn: Connected(..conn, ping: PingIdle)),
               )
             }
-            None | Some(_) -> actor.continue(state)
+            PingIdle | PingSent(_) -> actor.continue(state)
           }
         }
         PingTimeout(ref) -> {
-          case conn.ping_ref {
-            Some(ping_ref) if ping_ref == ref -> {
+          case conn.ping {
+            PingSent(ping_ref) if ping_ref == ref -> {
               io.println_error("didnt get Pong on time, disconnecting")
               disconnect(state) |> actor.continue
             }
-            None | Some(_) -> actor.continue(state)
+            PingIdle | PingSent(_) -> actor.continue(state)
           }
         }
       }
@@ -220,7 +221,7 @@ fn handle_message(state: State, msg: Msg) {
                     conn: Connected(
                       socket: socket,
                       buffer: <<>>,
-                      ping_ref: None,
+                      ping: PingIdle,
                     )
                       |> send_ping(),
                     self: state.self,
@@ -265,7 +266,7 @@ fn send_ping(state: ConnectionState) -> ConnectionState {
     Disconnected -> state
     Connected(socket:, ..) ->
       case mug.send(socket, protocol.cmd_to_bits(protocol.ClientPing)) {
-        Ok(Nil) -> Connected(..state, ping_ref: Some(reference.new()))
+        Ok(Nil) -> Connected(..state, ping: PingSent(reference.new()))
         Error(_) -> Disconnected
       }
   }
@@ -312,13 +313,12 @@ fn handle_server_message(state, msg) {
     protocol.Pong -> {
       case state.conn {
         Disconnected -> Nil
-        Connected(ping_ref:, ..) -> {
-          process.send(
-            state.self,
-            GotPong(ping_ref |> option.lazy_unwrap(reference.new)),
-          )
+        Connected(ping: PingSent(ping_ref), ..) -> {
+          process.send(state.self, GotPong(ping_ref))
           Nil
         }
+        Connected(ping: PingIdle, ..) ->
+          panic as "got unexpected PONG from server"
       }
 
       state
