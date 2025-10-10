@@ -36,15 +36,22 @@ pub type Event {
   Message(topic: String, headers: List(#(String, String)), payload: BitArray)
 }
 
+type ConnectionState {
+  Disconnected
+  Connected(
+    socket: mug.Socket,
+    buffer: BitArray,
+    ping_ref: option.Option(Reference),
+  )
+}
+
 type State {
   State(
     config: Config,
     subscribers: Subscribers,
-    socket: option.Option(mug.Socket),
-    next_sid: Int,
-    buffer: BitArray,
     self: process.Subject(Msg),
-    ping_ref: option.Option(Reference),
+    next_sid: Int,
+    conn: ConnectionState,
   )
 }
 
@@ -82,9 +89,7 @@ pub fn start(config: Config) {
       dict.new(),
       self: subject,
       next_sid: 1,
-      socket: None,
-      buffer: <<>>,
-      ping_ref: None,
+      conn: Disconnected,
     ))
     |> actor.selecting(
       process.new_selector()
@@ -101,13 +106,13 @@ pub fn start(config: Config) {
 
 fn handle_message(state: State, msg: Msg) {
   case state {
-    State(socket: Some(socket), ..) as state -> {
+    State(conn: Connected(socket:, ..) as conn, ..) as state -> {
       case msg {
         Data(tcp) -> {
           mug.receive_next_packet_as_message(socket)
           case tcp {
             mug.Packet(_socket, data) -> {
-              let buffer = bit_array.append(state.buffer, data)
+              let buffer = bit_array.append(conn.buffer, data)
               case read_protocol_messages(state, buffer) {
                 Ok(state) -> state
                 Error(_) -> disconnect(state)
@@ -164,26 +169,33 @@ fn handle_message(state: State, msg: Msg) {
             Ok(Nil) -> {
               let ping_ref = reference.new()
               process.send_after(state.self, 2000, PingTimeout(ping_ref))
-              actor.continue(State(..state, ping_ref: Some(ping_ref)))
+              actor.continue(
+                State(
+                  ..state,
+                  conn: Connected(..conn, ping_ref: Some(ping_ref)),
+                ),
+              )
             }
             Error(_) -> actor.continue(disconnect(state))
           }
         }
         GotPong(ref) -> {
-          case state.ping_ref {
+          case conn.ping_ref {
             Some(ping_ref) if ping_ref == ref -> {
               process.send_after(
                 state.self,
                 state.config.ping_interval,
                 SendPing,
               )
-              actor.continue(State(..state, ping_ref: None))
+              actor.continue(
+                State(..state, conn: Connected(..conn, ping_ref: None)),
+              )
             }
             None | Some(_) -> actor.continue(state)
           }
         }
         PingTimeout(ref) -> {
-          case state.ping_ref {
+          case conn.ping_ref {
             Some(ping_ref) if ping_ref == ref -> {
               io.println_error("didnt get Pong on time, disconnecting")
               disconnect(state) |> actor.continue
@@ -203,14 +215,16 @@ fn handle_message(state: State, msg: Msg) {
                 Ok(socket) -> {
                   State(
                     config: state.config,
-                    socket: Some(socket),
-                    buffer: <<>>,
-                    next_sid: 1,
+                    next_sid: state.next_sid,
                     subscribers: state.subscribers,
+                    conn: Connected(
+                      socket: socket,
+                      buffer: <<>>,
+                      ping_ref: None,
+                    )
+                      |> send_ping(),
                     self: state.self,
-                    ping_ref: None,
                   )
-                  |> send_ping()
                   |> actor.continue
                 }
                 Error(_err) -> actor.continue(state)
@@ -246,16 +260,21 @@ fn handle_message(state: State, msg: Msg) {
   }
 }
 
-fn send_ping(state: State) {
-  case state.socket {
-    None -> state
-    Some(socket) ->
+fn send_ping(state: ConnectionState) -> ConnectionState {
+  case state {
+    Disconnected -> state
+    Connected(socket:, ..) ->
       case mug.send(socket, protocol.cmd_to_bits(protocol.ClientPing)) {
-        Ok(Nil) -> {
-          State(..state, ping_ref: Some(reference.new()))
-        }
-        Error(_) -> disconnect(state)
+        Ok(Nil) -> Connected(..state, ping_ref: Some(reference.new()))
+        Error(_) -> Disconnected
       }
+  }
+}
+
+fn update_buffer(conn: ConnectionState, buffer: BitArray) {
+  case conn {
+    Connected(..) -> Connected(..conn, buffer:)
+    Disconnected -> conn
   }
 }
 
@@ -265,7 +284,8 @@ fn read_protocol_messages(state: State, buffer: BitArray) -> Result(State, Nil) 
       state
       |> handle_server_message(msg)
       |> read_protocol_messages(buffer)
-    protocol.NeedsMoreData -> Ok(State(..state, buffer: buffer))
+    protocol.NeedsMoreData ->
+      Ok(State(..state, conn: update_buffer(state.conn, buffer)))
     protocol.ProtocolError(..) -> Error(Nil)
   }
 }
@@ -290,17 +310,12 @@ fn handle_server_message(state, msg) {
       state
     }
     protocol.Pong -> {
-      case state.socket {
-        None -> {
-          Nil
-        }
-        Some(_socket) -> {
+      case state.conn {
+        Disconnected -> Nil
+        Connected(ping_ref:, ..) -> {
           process.send(
             state.self,
-            GotPong(
-              state.ping_ref
-              |> option.lazy_unwrap(reference.new),
-            ),
+            GotPong(ping_ref |> option.lazy_unwrap(reference.new)),
           )
           Nil
         }
@@ -330,11 +345,11 @@ fn dispatch_message(state: State, sid, topic, headers, payload) {
 }
 
 fn disconnect(state: State) {
-  case state.socket {
-    None -> state
-    Some(_) -> {
+  case state.conn {
+    Disconnected -> state
+    Connected(..) -> {
       process.send_after(state.self, 5000, Connect)
-      State(..state, socket: option.None, buffer: <<>>, ping_ref: None)
+      State(..state, conn: Disconnected)
     }
   }
 }
@@ -373,14 +388,14 @@ fn tcp_send(
   data: protocol.Command,
   update_state: fn(State) -> State,
 ) {
-  case state.socket {
-    Some(socket) -> {
+  case state.conn {
+    Connected(socket:, ..) -> {
       case mug.send(socket, protocol.cmd_to_bits(data)) {
         Ok(Nil) -> update_state(state)
         Error(_) -> disconnect(state)
       }
     }
-    None -> state
+    Disconnected -> state
   }
 }
 
