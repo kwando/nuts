@@ -4,13 +4,13 @@ import nuts
 
 pub fn client_test() {
   let assert Ok(nats) = nuts.new("127.0.0.1", 6789) |> nuts.start()
-  nats
-  |> nuts.is_connected()
-  |> should.equal(True)
+  assert nats
+    |> nuts.is_connected()
+    as "should be connected"
 
-  nats
-  |> nuts.publish_bits("foo", <<"hello">>)
-  |> should.be_ok
+  let assert Ok(_) =
+    nats
+    |> nuts.publish_bits("foo", <<"hello">>)
 
   let me = process.new_subject()
   nats
