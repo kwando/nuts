@@ -10,6 +10,7 @@ import gleam/otp/actor
 import gleam/result
 import mug
 import nuts/connect_options
+import nuts/internal/command
 import nuts/internal/protocol
 
 pub opaque type Config {
@@ -141,7 +142,11 @@ fn handle_message(state: State, msg: Msg) {
         Connect -> actor.continue(state)
         Publish(topic:, payload:, reply:) -> {
           let updated_state =
-            tcp_send(state, protocol.Pub(topic:, payload:), function.identity)
+            tcp_send_bits(
+              state,
+              command.pub_(subject: topic, reply_to: None, payload:),
+              function.identity,
+            )
           actor.send(reply, Ok(Nil))
           actor.continue(updated_state)
         }
@@ -149,13 +154,7 @@ fn handle_message(state: State, msg: Msg) {
           let #(sid, updated_state) =
             register_subscriber(state, topic, callback)
 
-          case
-            mug.send(
-              socket,
-              protocol.Sub(topic:, sid:, queue_group: None)
-                |> protocol.cmd_to_bits,
-            )
-          {
+          case mug.send(socket, command.sub(topic, sid, None)) {
             Ok(Nil) -> actor.continue(updated_state)
             Error(_) -> actor.continue(disconnect(state))
           }
@@ -166,7 +165,7 @@ fn handle_message(state: State, msg: Msg) {
           actor.continue(state)
         }
         SendPing -> {
-          case mug.send(socket, protocol.cmd_to_bits(protocol.ClientPing)) {
+          case mug.send(socket, command.ping()) {
             Ok(Nil) -> {
               let ping_ref = reference.new()
               process.send_after(state.self, 2000, PingTimeout(ping_ref))
@@ -265,7 +264,7 @@ fn send_ping(state: ConnectionState) -> ConnectionState {
   case state {
     Disconnected -> state
     Connected(socket:, ..) ->
-      case mug.send(socket, protocol.cmd_to_bits(protocol.ClientPing)) {
+      case mug.send(socket, command.ping()) {
         Ok(Nil) -> Connected(..state, ping: PingSent(reference.new()))
         Error(_) -> Disconnected
       }
@@ -294,9 +293,9 @@ fn read_protocol_messages(state: State, buffer: BitArray) -> Result(State, Nil) 
 fn handle_server_message(state, msg) {
   case msg {
     protocol.Info(..) -> {
-      use _ <- tcp_send(
+      use _ <- tcp_send_bits(
         state,
-        protocol.Connect([
+        command.connect([
           connect_options.Verbose(False),
           connect_options.Version("0.0.0"),
           connect_options.Lang("gleam"),
@@ -307,7 +306,7 @@ fn handle_server_message(state, msg) {
       state
     }
     protocol.Ping -> {
-      use _ <- tcp_send(state, protocol.ClientPong)
+      use _ <- tcp_send_bits(state, command.pong())
       state
     }
     protocol.Pong -> {
@@ -383,14 +382,10 @@ fn register_subscriber(state: State, topic, callback) {
   #(sid, State(..state, next_sid: state.next_sid + 1))
 }
 
-fn tcp_send(
-  state: State,
-  data: protocol.Command,
-  update_state: fn(State) -> State,
-) {
+fn tcp_send_bits(state: State, data: BitArray, update_state: fn(State) -> State) {
   case state.conn {
     Connected(socket:, ..) -> {
-      case mug.send(socket, protocol.cmd_to_bits(data)) {
+      case mug.send(socket, data) {
         Ok(Nil) -> update_state(state)
         Error(_) -> disconnect(state)
       }

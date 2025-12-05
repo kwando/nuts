@@ -3,15 +3,6 @@ import gleam/int
 import gleam/list
 import gleam/option
 import gleam/string
-import nuts/connect_options
-
-pub type Command {
-  Connect(List(connect_options.ConnectOption))
-  Sub(topic: String, sid: String, queue_group: option.Option(String))
-  Pub(topic: String, payload: BitArray)
-  ClientPing
-  ClientPong
-}
 
 pub type ServerMessage {
   Info(BitArray)
@@ -36,41 +27,6 @@ pub type ProtocolReadResult {
   Continue(ServerMessage, BitArray)
   ProtocolError(String)
   NeedsMoreData
-}
-
-pub fn cmd_to_bits(cmd: Command) {
-  case cmd {
-    Connect(data) -> <<"CONNECT ", connect_options.to_json(data):utf8, "\r\n">>
-    ClientPing -> <<"PING\r\n">>
-    ClientPong -> <<"PONG\r\n">>
-    Pub(topic, payload) -> {
-      <<
-        "PUB ",
-        topic:utf8,
-        " ",
-        { bit_array.byte_size(payload) |> int.to_string() }:utf8,
-        "\r\n",
-        payload:bits,
-        "\r\n",
-      >>
-    }
-    Sub(topic:, sid:, queue_group: option.None) -> <<
-      "SUB ",
-      topic:utf8,
-      " ",
-      sid:utf8,
-      "\r\n",
-    >>
-    Sub(topic:, sid:, queue_group: option.Some(queue_group)) -> <<
-      "SUB ",
-      topic:utf8,
-      " ",
-      queue_group:utf8,
-      " ",
-      sid:utf8,
-      "\r\n",
-    >>
-  }
 }
 
 pub fn parse(buffer: BitArray) -> ProtocolReadResult {
