@@ -1,6 +1,6 @@
 import gleam/bit_array
-import gleam/dict
-import gleam/erlang/process
+import gleam/dict.{type Dict}
+import gleam/erlang/process.{type Subject}
 import gleam/erlang/reference.{type Reference}
 import gleam/function
 import gleam/int
@@ -51,22 +51,23 @@ type State {
   State(
     config: Config,
     subscribers: Subscribers,
-    self: process.Subject(Msg),
+    self: Subject(Message),
     next_sid: Int,
     conn: ConnectionState,
   )
 }
 
-pub opaque type Msg {
+pub opaque type Message {
   Connect
   Data(mug.TcpMessage)
   Publish(
     topic: String,
     payload: BitArray,
-    reply: process.Subject(Result(Nil, Nil)),
+    headers: List(#(String, String)),
+    reply: Subject(Result(Nil, Nil)),
   )
   Subscribe(topic: String, callback: Callback)
-  IsConnected(process.Subject(Bool))
+  IsConnected(Subject(Bool))
   Shutdown
   SendPing
   GotPong(Reference)
@@ -84,21 +85,21 @@ pub fn new(host: String, port: Int) {
 }
 
 pub fn start(config: Config) {
-  actor.new_with_initialiser(1000, fn(subject) {
-    actor.send(subject, Connect)
+  actor.new_with_initialiser(1000, fn(self) {
+    actor.send(self, Connect)
     actor.initialised(State(
       config,
       dict.new(),
-      self: subject,
+      self: self,
       next_sid: 1,
       conn: Disconnected,
     ))
     |> actor.selecting(
       process.new_selector()
       |> mug.select_tcp_messages(Data)
-      |> process.select(subject),
+      |> process.select(self),
     )
-    |> actor.returning(subject)
+    |> actor.returning(self)
     |> Ok
   })
   |> actor.on_message(handle_message)
@@ -106,7 +107,7 @@ pub fn start(config: Config) {
   |> result.map(fn(started) { started.data })
 }
 
-fn handle_message(state: State, msg: Msg) {
+fn handle_message(state: State, msg: Message) {
   case state {
     State(conn: Connected(socket:, ..) as conn, ..) as state -> {
       case msg {
@@ -140,13 +141,22 @@ fn handle_message(state: State, msg: Msg) {
           }
         }
         Connect -> actor.continue(state)
-        Publish(topic:, payload:, reply:) -> {
-          let updated_state =
-            tcp_send_bits(
-              state,
-              command.pub_(subject: topic, reply_to: None, payload:),
-              function.identity,
-            )
+        Publish(topic:, payload:, reply:, headers:) -> {
+          let updated_state = case headers {
+            [] ->
+              tcp_send_bits(
+                state,
+                command.pub_(subject: topic, reply_to: None, payload:),
+                function.identity,
+              )
+            headers ->
+              tcp_send_bits(
+                state,
+                command.hpub(subject: topic, reply_to: None, headers:, payload:),
+                function.identity,
+              )
+          }
+
           actor.send(reply, Ok(Nil))
           actor.continue(updated_state)
         }
@@ -357,7 +367,7 @@ fn update_subscribers(state: State, update: fn(Subscribers) -> Subscribers) {
   State(..state, subscribers: update(state.subscribers))
 }
 
-fn resubscribe(socket: mug.Socket, subscribers: dict.Dict(String, Subscription)) {
+fn resubscribe(socket: mug.Socket, subscribers: Dict(String, Subscription)) {
   use acc, sid, susbcription <- dict.fold(subscribers, Ok(socket))
   case acc {
     Ok(socket) -> {
@@ -400,22 +410,18 @@ fn setup_connection(config: Config) {
 }
 
 // -------------------------------- [ PUBLIC API ] --------------------------------------
-pub fn publish_bits(subject: process.Subject(Msg), topic, payload) {
-  actor.call(subject, 5000, Publish(topic:, payload:, reply: _))
+pub fn publish_bits(subject: Subject(Message), topic, payload) {
+  actor.call(subject, 5000, Publish(topic:, payload:, reply: _, headers: []))
 }
 
-pub fn subscribe(
-  subject: process.Subject(Msg),
-  topic: String,
-  callback: Callback,
-) {
+pub fn subscribe(subject: Subject(Message), topic: String, callback: Callback) {
   actor.send(subject, Subscribe(topic, callback))
 }
 
-pub fn shutdown(subject: process.Subject(Msg)) {
+pub fn shutdown(subject: Subject(Message)) {
   actor.send(subject, Shutdown)
 }
 
-pub fn is_connected(subject: process.Subject(Msg)) {
+pub fn is_connected(subject: Subject(Message)) {
   actor.call(subject, 5000, IsConnected)
 }
