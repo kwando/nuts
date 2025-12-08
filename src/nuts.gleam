@@ -5,13 +5,14 @@ import gleam/erlang/reference.{type Reference}
 import gleam/function
 import gleam/int
 import gleam/io
-import gleam/option.{None}
+import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import mug
 import nuts/connect_options
 import nuts/internal/command
 import nuts/internal/protocol
+import nuts/nkey
 
 pub opaque type Config {
   Config(
@@ -20,6 +21,7 @@ pub opaque type Config {
     retry_interval: Int,
     ping_interval: Int,
     ping_timeout: Int,
+    nkey: Option(String),
   )
 }
 
@@ -81,7 +83,12 @@ pub fn new(host: String, port: Int) {
     retry_interval: 1000,
     ping_interval: 15_000,
     ping_timeout: 5000,
+    nkey: None,
   )
+}
+
+pub fn nkey(config: Config, nkey: String) {
+  Config(..config, nkey: Some(nkey))
 }
 
 pub fn start(config: Config) {
@@ -231,8 +238,7 @@ fn handle_message(state: State, msg: Message) {
                       socket: socket,
                       buffer: <<>>,
                       ping: PingIdle,
-                    )
-                      |> send_ping(),
+                    ),
                     self: state.self,
                   )
                   |> actor.continue
@@ -270,16 +276,16 @@ fn handle_message(state: State, msg: Message) {
   }
 }
 
-fn send_ping(state: ConnectionState) -> ConnectionState {
-  case state {
-    Disconnected -> state
-    Connected(socket:, ..) ->
-      case mug.send(socket, command.ping()) {
-        Ok(Nil) -> Connected(..state, ping: PingSent(reference.new()))
-        Error(_) -> Disconnected
-      }
-  }
-}
+//fn send_ping(state: ConnectionState) -> ConnectionState {
+//  case state {
+//    Disconnected -> state
+//    Connected(socket:, ..) ->
+//      case mug.send(socket, command.ping()) {
+//        Ok(Nil) -> Connected(..state, ping: PingSent(reference.new()))
+//        Error(_) -> Disconnected
+//      }
+//  }
+//}
 
 fn update_buffer(conn: ConnectionState, buffer: BitArray) {
   case conn {
@@ -300,17 +306,41 @@ fn read_protocol_messages(state: State, buffer: BitArray) -> Result(State, Nil) 
   }
 }
 
-fn handle_server_message(state, msg) {
+fn handle_server_message(state: State, msg) {
   case msg {
-    protocol.Info(..) -> {
+    protocol.Info(serverinfo) -> {
+      let signature = case serverinfo.nonce, state.config.nkey {
+        Some(nonce), Some(nkey) -> {
+          case nkey.from_seed(nkey) {
+            Ok(keypair) -> {
+              [
+                connect_options.Signature(bit_array.base64_url_encode(
+                  nkey.sign(keypair, bit_array.from_string(nonce)),
+                  False,
+                )),
+                connect_options.NKey(nkey.public(keypair)),
+              ]
+              |> Ok
+            }
+            Error(_) -> Error(Nil)
+          }
+        }
+        _, _ -> Error(Nil)
+      }
+
       use _ <- tcp_send_bits(
         state,
         command.connect([
           connect_options.Verbose(False),
-          connect_options.Version("0.0.0"),
-          connect_options.Lang("gleam"),
-          connect_options.Protocol(0),
+          connect_options.Pedantic(False),
           connect_options.TlsRequired(False),
+          connect_options.Name("Nuts Gleam NATS Client"),
+          connect_options.Lang("gleam"),
+          connect_options.Version("0.0.0"),
+          connect_options.Protocol(0),
+          connect_options.Headers(True),
+          connect_options.NoResponders(True),
+          ..result.unwrap(signature, [])
         ]),
       )
       state

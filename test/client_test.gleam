@@ -3,7 +3,11 @@ import gleeunit/should
 import nuts
 
 pub fn client_test() {
-  let assert Ok(nats) = nuts.new("127.0.0.1", 6789) |> nuts.start()
+  let assert Ok(nats) =
+    nuts.new("127.0.0.1", 6789)
+    |> nuts.nkey("SUALHP366GCQN53R7X3MJF4BCNEK6WTKATRZ7QAMDC7UTVBMC2WYUDKK64")
+    |> nuts.start()
+
   assert nats
     |> nuts.is_connected()
     as "should be connected"
@@ -19,13 +23,12 @@ pub fn client_test() {
     Ok(Nil)
   })
 
-  nats
-  |> nuts.publish_bits("foo", <<"world">>)
-  |> should.be_ok
+  let assert Ok(_) =
+    nats
+    |> nuts.publish_bits("foo", <<"world">>)
+    as "publish should work"
 
-  process.receive(me, 500)
-  |> should.be_ok
-  |> should.equal(nuts.Message("foo", [], <<"world">>))
+  assert Ok(nuts.Message("foo", [], <<"world">>)) == process.receive(me, 500)
 
   nats
   |> nuts.shutdown()

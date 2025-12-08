@@ -11,11 +11,14 @@ pub type ConnectOption {
   NKey(String)
   Echo(Bool)
   Protocol(Int)
+  Signature(String)
+  Name(String)
+  NoResponders(Bool)
 }
 
 pub const default_options: List(ConnectOption) = [
   Verbose(True),
-  Pedantic(True),
+  Pedantic(False),
   TlsRequired(False),
   Lang("gleam"),
   Version("0.0.1"),
@@ -36,6 +39,9 @@ pub fn to_json(options: List(ConnectOption)) {
           TlsRequired(v) -> #("tls_required", json.bool(v))
           Version(s) -> #("version", json.string(s))
           Protocol(i) -> #("protocol", json.int(i))
+          Signature(s) -> #("sig", json.string(s))
+          Name(s) -> #("name", json.string(s))
+          NoResponders(b) -> #("no_responders", json.bool(b))
         }
       }),
     ),
