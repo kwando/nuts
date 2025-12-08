@@ -2,7 +2,7 @@ import gleam/bit_array
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import nuts/connect_options.{type ConnectOption}
+import nuts/connect_options.{type ConnectOptions}
 
 pub fn ping() {
   <<"PING\r\n">>
@@ -76,8 +76,8 @@ pub fn hpub(
   >>
 }
 
-pub fn connect(data: List(ConnectOption)) {
-  <<"CONNECT ", connect_options.to_json(data):utf8, "\r\n">>
+pub fn connect(data: ConnectOptions) {
+  <<"CONNECT ", connect_options.to_json_string(data):utf8, "\r\n">>
 }
 
 pub fn unsub(sid: String, max_age: Option(Int)) {

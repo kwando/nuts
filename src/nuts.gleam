@@ -9,7 +9,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import mug
-import nuts/connect_options
+import nuts/connect_options.{ConnectOptions}
 import nuts/internal/command
 import nuts/internal/protocol
 import nuts/nkey
@@ -309,40 +309,42 @@ fn read_protocol_messages(state: State, buffer: BitArray) -> Result(State, Nil) 
 fn handle_server_message(state: State, msg) {
   case msg {
     protocol.Info(serverinfo) -> {
-      let signature = case serverinfo.nonce, state.config.nkey {
+      let opts =
+        ConnectOptions(
+          verbose: False,
+          pedantic: False,
+          tls_required: False,
+          lang: "gleam",
+          version: "0.0.0",
+          headers: True,
+          echo_: True,
+          protocol: 0,
+          auth: connect_options.NoAuth,
+          name: "Gleam Nuts NATS",
+          no_responders: True,
+        )
+      let opts = case serverinfo.nonce, state.config.nkey {
         Some(nonce), Some(nkey) -> {
           case nkey.from_seed(nkey) {
             Ok(keypair) -> {
-              [
-                connect_options.Signature(bit_array.base64_url_encode(
-                  nkey.sign(keypair, bit_array.from_string(nonce)),
-                  False,
-                )),
-                connect_options.NKey(nkey.public(keypair)),
-              ]
-              |> Ok
+              ConnectOptions(
+                ..opts,
+                auth: connect_options.NKeyAuth(
+                  public: nkey.public(keypair),
+                  signature: bit_array.base64_url_encode(
+                    nkey.sign(keypair, bit_array.from_string(nonce)),
+                    False,
+                  ),
+                ),
+              )
             }
-            Error(_) -> Error(Nil)
+            Error(_) -> opts
           }
         }
-        _, _ -> Error(Nil)
+        _, _ -> opts
       }
 
-      use _ <- tcp_send_bits(
-        state,
-        command.connect([
-          connect_options.Verbose(False),
-          connect_options.Pedantic(False),
-          connect_options.TlsRequired(False),
-          connect_options.Name("Nuts Gleam NATS Client"),
-          connect_options.Lang("gleam"),
-          connect_options.Version("0.0.0"),
-          connect_options.Protocol(0),
-          connect_options.Headers(True),
-          connect_options.NoResponders(True),
-          ..result.unwrap(signature, [])
-        ]),
-      )
+      use _ <- tcp_send_bits(state, command.connect(opts))
       state
     }
     protocol.Ping -> {
