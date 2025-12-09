@@ -16,12 +16,9 @@ pub fn client_test() {
     nats
     |> nuts.publish_bits("foo", <<"hello">>)
 
-  let me = process.new_subject()
-  nats
-  |> nuts.subscribe(">", fn(event) {
-    process.send(me, event)
-    Ok(Nil)
-  })
+  let assert Ok(me) =
+    nats
+    |> nuts.subscribe(">")
 
   let assert Ok(_) =
     nats
@@ -45,8 +42,9 @@ pub fn disconnected_client_test() {
   |> nuts.publish_bits("foo", <<"hello">>)
   |> should.be_error
 
-  nats
-  |> nuts.subscribe("foo", fn(_event) { Ok(Nil) })
+  let assert Ok(_) =
+    nats
+    |> nuts.subscribe("foo")
 
   nats
   |> nuts.publish_bits("foo", <<"hello">>)

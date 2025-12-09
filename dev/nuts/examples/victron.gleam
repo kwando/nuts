@@ -6,21 +6,16 @@ import nuts
 pub fn main() {
   let assert Ok(nats) = nuts.start(nuts.new("100.121.244.19", 4222))
 
-  let me: process.Subject(#(String, String)) = process.new_subject()
-  nuts.subscribe(nats, "naboo.victron", fn(msg) {
-    let assert Ok(payload_str) = bit_array.to_string(msg.payload)
-    process.send(me, #(msg.topic, payload_str))
-    Ok(Nil)
-  })
-
+  let assert Ok(me) = nuts.subscribe(nats, "naboo.victron")
   loop(me)
 }
 
-fn loop(subject: process.Subject(#(String, String))) -> a {
+fn loop(subject: process.Subject(nuts.Event)) -> a {
   case process.receive(subject, 1000) {
     Error(_) -> loop(subject)
-    Ok(#(_topic, msg)) -> {
-      io.println(msg)
+    Ok(evt) -> {
+      let assert Ok(msg) = bit_array.to_string(evt.payload)
+      io.println(evt.topic <> ": " <> msg)
       loop(subject)
     }
   }

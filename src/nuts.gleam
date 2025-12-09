@@ -25,15 +25,16 @@ pub opaque type Config {
   )
 }
 
-type Subscription {
-  Subscription(topic: String, callback: Callback)
+type SubscriberRecord {
+  SubscriberRecord(topic: String, subject: Subject(Event))
 }
 
-type Callback =
-  fn(Event) -> Result(Nil, Nil)
-
-type Subscribers =
-  dict.Dict(String, Subscription)
+type SubscriberRegistry {
+  SubscriberRegistry(
+    subscriptions: Dict(String, SubscriberRecord),
+    listeners: Dict(process.Monitor, String),
+  )
+}
 
 pub type Event {
   Message(topic: String, headers: List(#(String, String)), payload: BitArray)
@@ -52,7 +53,7 @@ type ConnectionState {
 type State {
   State(
     config: Config,
-    subscribers: Subscribers,
+    subscribers: SubscriberRegistry,
     self: Subject(Message),
     next_sid: Int,
     conn: ConnectionState,
@@ -68,12 +69,18 @@ pub opaque type Message {
     headers: List(#(String, String)),
     reply: Subject(Result(Nil, Nil)),
   )
-  Subscribe(topic: String, callback: Callback)
+  Subscribe(
+    topic: String,
+    listener: Subject(Event),
+    reply_to: Subject(Result(Subject(Event), Nil)),
+  )
   IsConnected(Subject(Bool))
   Shutdown
   SendPing
   GotPong(Reference)
   PingTimeout(Reference)
+
+  ProcessDown(process.Down)
 }
 
 pub fn new(host: String, port: Int) {
@@ -96,7 +103,7 @@ pub fn start(config: Config) {
     actor.send(self, Connect)
     actor.initialised(State(
       config,
-      dict.new(),
+      SubscriberRegistry(dict.new(), dict.new()),
       self: self,
       next_sid: 1,
       conn: Disconnected,
@@ -104,6 +111,7 @@ pub fn start(config: Config) {
     |> actor.selecting(
       process.new_selector()
       |> mug.select_tcp_messages(Data)
+      |> process.select_monitors(ProcessDown)
       |> process.select(self),
     )
     |> actor.returning(self)
@@ -167,10 +175,11 @@ fn handle_message(state: State, msg: Message) {
           actor.send(reply, Ok(Nil))
           actor.continue(updated_state)
         }
-        Subscribe(topic, callback) -> {
+        Subscribe(topic, callback, reply_to) -> {
           let #(sid, updated_state) =
             register_subscriber(state, topic, callback)
 
+          actor.send(reply_to, Ok(callback))
           case mug.send(socket, command.sub(topic, sid, None)) {
             Ok(Nil) -> actor.continue(updated_state)
             Error(_) -> actor.continue(disconnect(state))
@@ -220,6 +229,10 @@ fn handle_message(state: State, msg: Message) {
             PingIdle | PingSent(_) -> actor.continue(state)
           }
         }
+        ProcessDown(down) ->
+          state
+          |> unregister_subscriber(down.monitor)
+          |> actor.continue
       }
     }
     State(..) -> {
@@ -256,8 +269,9 @@ fn handle_message(state: State, msg: Message) {
             }
           }
         }
-        Subscribe(topic:, callback:) -> {
-          let #(_sid, state) = register_subscriber(state, topic, callback)
+        Subscribe(topic:, listener:, reply_to:) -> {
+          let #(_sid, state) = register_subscriber(state, topic, listener)
+          actor.send(reply_to, Ok(listener))
           actor.continue(state)
         }
         Shutdown -> actor.stop()
@@ -271,6 +285,10 @@ fn handle_message(state: State, msg: Message) {
           actor.continue(state)
         }
         SendPing | GotPong(_) | PingTimeout(_) -> actor.continue(state)
+        ProcessDown(down) ->
+          state
+          |> unregister_subscriber(down.monitor)
+          |> actor.continue
       }
     }
   }
@@ -374,12 +392,10 @@ fn handle_server_message(state: State, msg) {
 }
 
 fn dispatch_message(state: State, sid, topic, headers, payload) {
-  case dict.get(state.subscribers, sid) {
+  case dict.get(state.subscribers.subscriptions, sid) {
     Ok(subscription) -> {
-      case subscription.callback(Message(topic, headers, payload)) {
-        Ok(_) -> state
-        Error(_) -> update_subscribers(state, dict.delete(_, sid))
-      }
+      actor.send(subscription.subject, Message(topic, headers, payload))
+      state
     }
     Error(_) -> state
   }
@@ -395,12 +411,15 @@ fn disconnect(state: State) {
   }
 }
 
-fn update_subscribers(state: State, update: fn(Subscribers) -> Subscribers) {
+fn update_subscribers(
+  state: State,
+  update: fn(SubscriberRegistry) -> SubscriberRegistry,
+) {
   State(..state, subscribers: update(state.subscribers))
 }
 
-fn resubscribe(socket: mug.Socket, subscribers: Dict(String, Subscription)) {
-  use acc, sid, susbcription <- dict.fold(subscribers, Ok(socket))
+fn resubscribe(socket: mug.Socket, subscribers: SubscriberRegistry) {
+  use acc, sid, susbcription <- dict.fold(subscribers.subscriptions, Ok(socket))
   case acc {
     Ok(socket) -> {
       mug.send(socket, <<
@@ -416,12 +435,47 @@ fn resubscribe(socket: mug.Socket, subscribers: Dict(String, Subscription)) {
   }
 }
 
-fn register_subscriber(state: State, topic, callback) {
+fn register_subscriber(
+  state: State,
+  topic: String,
+  callback: Subject(Event),
+) -> #(String, State) {
   let sid = state.next_sid |> int.to_string
   let state =
-    update_subscribers(state, dict.insert(_, sid, Subscription(topic, callback)))
+    update_subscribers(state, fn(subscribers) {
+      case process.subject_owner(callback) {
+        Error(_) -> subscribers
+        Ok(pid) -> {
+          let monitor = process.monitor(pid)
+          SubscriberRegistry(
+            subscriptions: dict.insert(
+              subscribers.subscriptions,
+              sid,
+              SubscriberRecord(topic, callback),
+            ),
+            listeners: dict.insert(subscribers.listeners, monitor, sid),
+          )
+        }
+      }
+    })
 
   #(sid, State(..state, next_sid: state.next_sid + 1))
+}
+
+fn unregister_subscriber(state: State, monitor: process.Monitor) {
+  case dict.get(state.subscribers.listeners, monitor) {
+    Error(_) -> state
+    Ok(sid) -> {
+      state
+      |> update_subscribers(fn(reg) {
+        SubscriberRegistry(
+          subscriptions: reg.subscriptions |> dict.delete(sid),
+          listeners: reg.listeners |> dict.delete(monitor),
+        )
+      })
+      |> tcp_send_bits(command.unsub(sid, None), function.identity)
+    }
+  }
 }
 
 fn tcp_send_bits(state: State, data: BitArray, update_state: fn(State) -> State) {
@@ -446,8 +500,11 @@ pub fn publish_bits(subject: Subject(Message), topic, payload) {
   actor.call(subject, 5000, Publish(topic:, payload:, reply: _, headers: []))
 }
 
-pub fn subscribe(subject: Subject(Message), topic: String, callback: Callback) {
-  actor.send(subject, Subscribe(topic, callback))
+pub fn subscribe(
+  subject: Subject(Message),
+  topic: String,
+) -> Result(Subject(Event), Nil) {
+  actor.call(subject, 1000, Subscribe(topic, process.new_subject(), _))
 }
 
 pub fn shutdown(subject: Subject(Message)) {

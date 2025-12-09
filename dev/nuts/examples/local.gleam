@@ -1,27 +1,24 @@
-import gleam/bit_array
 import gleam/erlang/process
 import gleam/io
+import gleam/string
 import gleam_community/ansi
 import nuts
 
 pub fn main() {
   let assert Ok(nats) = nuts.start(nuts.new("127.0.0.1", 4222))
 
-  let me: process.Subject(#(String, String)) = process.new_subject()
-  nuts.subscribe(nats, ">", fn(msg) {
-    let assert Ok(payload_str) = bit_array.to_string(msg.payload)
-    process.send(me, #(msg.topic, payload_str))
-    Ok(Nil)
-  })
+  let assert Ok(me) = nuts.subscribe(nats, ">")
 
   loop(me)
 }
 
-fn loop(subject: process.Subject(#(String, String))) -> a {
+fn loop(subject: process.Subject(nuts.Event)) -> a {
   case process.receive(subject, 1000) {
     Error(_) -> loop(subject)
-    Ok(#(topic, msg)) -> {
-      io.println(ansi.green(topic) <> " " <> msg)
+    Ok(event) -> {
+      io.println(
+        ansi.green(event.topic) <> " " <> event.payload |> string.inspect,
+      )
       loop(subject)
     }
   }
