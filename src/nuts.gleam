@@ -37,7 +37,12 @@ type SubscriberRegistry {
 }
 
 pub type Event {
-  Message(topic: String, headers: List(#(String, String)), payload: BitArray)
+  Message(
+    topic: String,
+    headers: List(#(String, String)),
+    payload: BitArray,
+    reply_to: Option(String),
+  )
 }
 
 type PingState {
@@ -382,19 +387,22 @@ fn handle_server_message(state: State, msg) {
 
       state
     }
-    protocol.Msg(topic:, payload:, sid:, ..) -> {
-      state |> dispatch_message(sid, topic, [], payload)
+    protocol.Msg(topic:, payload:, sid:, reply_to:) -> {
+      state |> dispatch_message(sid, topic, [], payload, reply_to)
     }
-    protocol.Hmsg(topic:, payload:, sid:, headers:, ..) -> {
-      state |> dispatch_message(sid, topic, headers, payload)
+    protocol.Hmsg(topic:, payload:, sid:, headers:, reply_to:) -> {
+      state |> dispatch_message(sid, topic, headers, payload, reply_to)
     }
   }
 }
 
-fn dispatch_message(state: State, sid, topic, headers, payload) {
+fn dispatch_message(state: State, sid, topic, headers, payload, reply_to) {
   case dict.get(state.subscribers.subscriptions, sid) {
     Ok(subscription) -> {
-      actor.send(subscription.subject, Message(topic, headers, payload))
+      actor.send(
+        subscription.subject,
+        Message(topic, headers, payload, reply_to),
+      )
       state
     }
     Error(_) -> state

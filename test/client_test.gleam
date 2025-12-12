@@ -1,4 +1,5 @@
 import gleam/erlang/process
+import gleam/option.{None}
 import gleeunit/should
 import nuts
 
@@ -25,7 +26,8 @@ pub fn client_test() {
     |> nuts.publish_bits("foo", <<"world">>)
     as "publish should work"
 
-  assert Ok(nuts.Message("foo", [], <<"world">>)) == process.receive(me, 500)
+  assert Ok(nuts.Message("foo", [], <<"world">>, None))
+    == process.receive(me, 500)
 
   nats
   |> nuts.shutdown()
