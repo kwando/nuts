@@ -11,7 +11,7 @@ pub fn nats_test() {
 
   let conn = started.data
 
-  process.sleep(100)
+  await_connected(conn)
 
   let assert Ok(Nil) =
     nats.publish(
@@ -58,6 +58,33 @@ fn receive_count(subject, count: Int, timeout: Int) {
           receive_count(subject, n - 1, timeout)
         }
       }
+    }
+  }
+}
+
+pub fn nkey_test() {
+  let assert Ok(started) =
+    nats.new("127.0.0.1", 6789)
+    |> nats.nkey_seed(
+      "SUALHP366GCQN53R7X3MJF4BCNEK6WTKATRZ7QAMDC7UTVBMC2WYUDKK64",
+    )
+    |> nats.start()
+
+  let conn = started.data
+  await_connected(conn)
+
+  let assert Ok(_) =
+    nats.new_message("test.nkey_test", <<"wibble">>)
+    |> nats.publish(conn, _)
+    as "should be published"
+}
+
+fn await_connected(conn: process.Subject(nats.Message)) {
+  case nats.is_connected(conn) {
+    True -> Nil
+    False -> {
+      process.sleep(10)
+      await_connected(conn)
     }
   }
 }

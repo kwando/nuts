@@ -29,7 +29,7 @@ pub type ServerInfo {
     jetstream: Option(Bool),
     ip: Option(String),
     client_ip: Option(String),
-    nonce: Option(String),
+    nonce: Option(BitArray),
     cluster: Option(String),
     domain: Option(String),
   )
@@ -326,7 +326,7 @@ fn server_info_decoder() -> decode.Decoder(ServerInfo) {
   use nonce <- decode.optional_field(
     "nonce",
     None,
-    decode.optional(decode.string),
+    decode.optional(decode.bit_array),
   )
   use cluster <- decode.optional_field(
     "cluster",

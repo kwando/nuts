@@ -1,4 +1,6 @@
+import gleam/bit_array
 import gleam/json
+import nuts/nkey
 
 pub type Auth {
   NoAuth
@@ -65,4 +67,18 @@ fn append_auth(opts, auth: Auth) {
 
 pub fn to_json_string(options: ConnectOptions) {
   json.to_string(to_json(options))
+}
+
+pub fn nkey_auth(nkey_seed: String, nonce: BitArray) {
+  case nkey.from_seed(nkey_seed) {
+    Error(err) -> Error(err)
+    Ok(keypair) -> {
+      NKeyAuth(
+        public: nkey.public(keypair),
+        signature: nkey.sign(keypair, nonce)
+          |> bit_array.base64_url_encode(False),
+      )
+      |> Ok
+    }
+  }
 }

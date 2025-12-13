@@ -12,15 +12,24 @@ import nuts/internal/command
 import nuts/internal/protocol.{type ServerInfo}
 
 pub opaque type Config {
-  Config(host: String, port: Int, client_name: Option(String))
+  Config(
+    host: String,
+    port: Int,
+    client_name: Option(String),
+    nkey_seed: Option(String),
+  )
 }
 
 pub fn new(host: String, port: Int) -> Config {
-  Config(host, port, client_name: None)
+  Config(host, port, client_name: None, nkey_seed: None)
 }
 
 pub fn client_name(config, client_name: String) {
   Config(..config, client_name: Some(client_name))
+}
+
+pub fn nkey_seed(config, nkey: String) {
+  Config(..config, nkey_seed: Some(nkey))
 }
 
 pub type NatsError {
@@ -40,6 +49,7 @@ pub opaque type Message {
   )
   SubscriberDown(process.Down)
   Shutdown(reply: Subject(Result(Nil, NatsError)))
+  IsConnected(reply: Subject(Bool))
 }
 
 type State {
@@ -239,6 +249,10 @@ fn handle_message(state: State, msg: Message) {
       |> actor.send(reply, _)
       actor.stop()
     }
+    IsConnected(reply:) -> {
+      actor.send(reply, state.authenticated)
+      actor.continue(state)
+    }
   }
 }
 
@@ -278,7 +292,21 @@ fn handle_server_message(state: State, msg: protocol.ServerMessage) -> State {
           headers: True,
           echo_: False,
           protocol: 0,
-          auth: connect_options.NoAuth,
+          auth: case state.config.nkey_seed, server_info.nonce {
+            None, _ -> connect_options.NoAuth
+            Some(nkey_seed), Some(nonce) -> {
+              case connect_options.nkey_auth(nkey_seed, nonce) {
+                Error(err) -> {
+                  state.log(
+                    "failed to authenticate with nkey " <> string.inspect(err),
+                  )
+                  connect_options.NoAuth
+                }
+                Ok(auth) -> auth
+              }
+            }
+            _, _ -> connect_options.NoAuth
+          },
           name: state.config.client_name
             |> option.unwrap("Gleam NUTS2"),
           no_responders: True,
@@ -411,4 +439,8 @@ pub fn set_header(message: NatsMessage, key: String, value: String) {
 
 pub fn shutdown(conn: Subject(Message)) {
   actor.call(conn, 5000, Shutdown)
+}
+
+pub fn is_connected(conn: Subject(Message)) -> Bool {
+  actor.call(conn, 5000, IsConnected)
 }

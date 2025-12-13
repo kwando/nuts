@@ -12,7 +12,6 @@ import mug
 import nuts/connect_options.{ConnectOptions}
 import nuts/internal/command
 import nuts/internal/protocol
-import nuts/nkey
 
 pub opaque type Config {
   Config(
@@ -348,20 +347,9 @@ fn handle_server_message(state: State, msg) {
         )
       let opts = case serverinfo.nonce, state.config.nkey {
         Some(nonce), Some(nkey) -> {
-          case nkey.from_seed(nkey) {
-            Ok(keypair) -> {
-              ConnectOptions(
-                ..opts,
-                auth: connect_options.NKeyAuth(
-                  public: nkey.public(keypair),
-                  signature: bit_array.base64_url_encode(
-                    nkey.sign(keypair, bit_array.from_string(nonce)),
-                    False,
-                  ),
-                ),
-              )
-            }
+          case connect_options.nkey_auth(nkey, nonce) {
             Error(_) -> opts
+            Ok(auth) -> ConnectOptions(..opts, auth:)
           }
         }
         _, _ -> opts
