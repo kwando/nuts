@@ -1,4 +1,4 @@
-import gleam/option
+import gleam/option.{None, Some}
 import gleeunit/should
 import nuts/internal/protocol.{Continue, NeedsMoreData}
 
@@ -17,18 +17,18 @@ pub fn parse_test() {
 
   protocol.parse(<<"MSG hello 12 11\r\nhello world\r\n">>)
   |> should.equal(
-    Continue(protocol.Msg("hello", "12", option.None, <<"hello world">>), <<>>),
+    Continue(protocol.Msg("hello", "12", None, <<"hello world">>), <<>>),
   )
 
   protocol.parse(<<"MSG hello 12 11\r\nhello world\r\n">>)
   |> should.equal(
-    Continue(protocol.Msg("hello", "12", option.None, <<"hello world">>), <<>>),
+    Continue(protocol.Msg("hello", "12", None, <<"hello world">>), <<>>),
   )
 
   protocol.parse(<<"MSG hello 12 orban 11\r\nhello world\r\n">>)
   |> should.equal(
     Continue(
-      protocol.Msg("hello", "12", option.Some("orban"), <<"hello world">>),
+      protocol.Msg("hello", "12", Some("orban"), <<"hello world">>),
       <<>>,
     ),
   )
@@ -41,11 +41,27 @@ pub fn parse_message_with_headers_test() {
   |> should.equal(
     Continue(
       protocol.Hmsg(
-        "FOO.BAR",
-        [#("FoodGroup", "vegetable")],
-        "alice",
-        option.None,
-        <<"Hello World">>,
+        topic: "FOO.BAR",
+        headers: [#("FoodGroup", "vegetable")],
+        sid: "alice",
+        reply_to: option.None,
+        payload: <<"Hello World">>,
+      ),
+      <<>>,
+    ),
+  )
+
+  protocol.parse(<<
+    "HMSG FOO.BAR 9 BAZ.69 34 45\r\nNATS/1.0\r\nFoodGroup: vegetable\r\n\r\nHello World\r\n",
+  >>)
+  |> should.equal(
+    Continue(
+      protocol.Hmsg(
+        topic: "FOO.BAR",
+        headers: [#("FoodGroup", "vegetable")],
+        sid: "9",
+        reply_to: Some("BAZ.69"),
+        payload: <<"Hello World">>,
       ),
       <<>>,
     ),

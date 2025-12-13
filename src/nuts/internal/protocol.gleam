@@ -3,7 +3,7 @@ import gleam/dynamic/decode
 import gleam/int
 import gleam/json
 import gleam/list
-import gleam/option.{type Option, None}
+import gleam/option.{type Option, None, Some}
 import gleam/string
 
 pub type ServerInfo {
@@ -47,6 +47,8 @@ pub type ServerMessage {
     reply_to: Option(String),
     payload: BitArray,
   )
+  OK
+  ERR(String)
 }
 
 pub type ProtocolReadResult {
@@ -70,7 +72,19 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
     }
     <<"PING\r\n", rest:bits>> -> Continue(Ping, rest)
     <<"PONG\r\n", rest:bits>> -> Continue(Pong, rest)
-    <<"+OK\r\n", rest:bits>> -> parse(rest)
+    <<"+OK\r\n", rest:bits>> -> Continue(OK, rest)
+    <<"-ERR ", rest:bits>> -> {
+      case readline(rest) {
+        Error(_) -> ProtocolError("no error message provided")
+        Ok(#(error, rest)) -> {
+          case bit_array.to_string(error) {
+            Error(_) ->
+              ProtocolError("failed to convert error message to string")
+            Ok(error_message) -> Continue(ERR(error_message), rest)
+          }
+        }
+      }
+    }
     <<"MSG ", rest:bits>> -> {
       case readline(rest) {
         Ok(#(line, rest)) -> {
@@ -92,7 +106,7 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
               case read_body(rest, <<>>, byte_size) {
                 BodyReadSuccess(payload, rest) -> {
                   Continue(
-                    Msg(topic:, sid:, payload:, reply_to: option.Some(reply_to)),
+                    Msg(topic:, sid:, payload:, reply_to: Some(reply_to)),
                     rest,
                   )
                 }
@@ -112,6 +126,37 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
         Ok(#(line, rest)) -> {
           let assert Ok(line) = bit_array.to_string(line)
           case string.split(line, " ") {
+            [topic, sid, reply_to, header_bytes, total_bytes] -> {
+              use header_bytes <- with_int(header_bytes)
+              use total_bytes <- with_int(total_bytes)
+
+              case read_body(rest, <<>>, header_bytes - 2) {
+                BodyReadSuccess(headers, rest) -> {
+                  case read_body(rest, <<>>, total_bytes - header_bytes) {
+                    BodyReadSuccess(body, rest) -> {
+                      case parse_headers(headers) {
+                        Ok(headers) ->
+                          Continue(
+                            Hmsg(
+                              topic:,
+                              sid:,
+                              headers:,
+                              payload: body,
+                              reply_to: Some(reply_to),
+                            ),
+                            rest,
+                          )
+                        Error(_) -> ProtocolError("malformed headers")
+                      }
+                    }
+                    BodyReadFail -> ProtocolError("malformed body")
+                    BodyTooShort -> NeedsMoreData
+                  }
+                }
+                BodyReadFail -> ProtocolError("failed to read headers")
+                BodyTooShort -> NeedsMoreData
+              }
+            }
             [topic, sid, header_bytes, total_bytes] -> {
               use header_bytes <- with_int(header_bytes)
               use total_bytes <- with_int(total_bytes)
@@ -143,7 +188,7 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
                 BodyTooShort -> NeedsMoreData
               }
             }
-            _ -> ProtocolError("invalid HMSG")
+            x -> ProtocolError("invalid HMSG: " <> string.inspect(x))
           }
         }
       }

@@ -12,7 +12,11 @@ pub fn pong() {
   <<"PONG\r\n">>
 }
 
-pub fn sub(topic: String, sid: String, queue_group: Option(String)) {
+pub fn sub(
+  subject topic: String,
+  sid sid: String,
+  queue_group queue_group: Option(String),
+) {
   case queue_group {
     None -> <<"SUB ", topic:utf8, " ", sid:utf8, "\r\n">>
     Some(queue_group) -> <<
@@ -35,11 +39,11 @@ pub fn pub_(
   <<
     "PUB ",
     topic:utf8,
+    " ",
     case reply_to {
       None -> ""
       Some(reply_to) -> reply_to <> " "
     }:utf8,
-    " ",
     { bit_array.byte_size(payload) |> int.to_string() }:utf8,
     "\r\n",
     payload:bits,

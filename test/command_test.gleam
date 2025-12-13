@@ -45,3 +45,12 @@ pub fn unsub_test() {
   assert command.unsub("1", None) == <<"UNSUB 1\r\n">>
   assert command.unsub("1", Some(5)) == <<"UNSUB 1 5\r\n">>
 }
+
+pub fn pub_test() {
+  assert command.pub_("hello", reply_to: option.None, payload: <<"MUPP">>)
+    == <<"PUB hello 4\r\nMUPP\r\n">>
+  assert command.pub_("hello", reply_to: option.Some("my_inbox"), payload: <<
+      "MUPP",
+    >>)
+    == <<"PUB hello my_inbox 4\r\nMUPP\r\n">>
+}

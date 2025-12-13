@@ -393,6 +393,8 @@ fn handle_server_message(state: State, msg) {
     protocol.Hmsg(topic:, payload:, sid:, headers:, reply_to:) -> {
       state |> dispatch_message(sid, topic, headers, payload, reply_to)
     }
+    protocol.ERR(_) -> state
+    protocol.OK -> state
   }
 }
 
