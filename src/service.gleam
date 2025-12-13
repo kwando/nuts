@@ -18,18 +18,18 @@ fn handle(
   conn: process.Subject(nuts.Message),
   subject: process.Subject(nuts.Event),
   handler: fn(nuts.Event) -> Result(BitArray, Nil),
-) -> a {
+) {
   let event = process.receive_forever(subject)
   let _ = case handler(event) {
-    Error(_) -> todo
     Ok(bits) -> {
       case event.reply_to {
-        option.None -> todo
         option.Some(inbox) -> {
           nuts.publish_bits(conn, inbox, bits)
         }
+        option.None -> todo
       }
     }
+    Error(_) -> todo
   }
 
   handle(conn, subject, handler)
