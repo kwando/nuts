@@ -1,22 +1,22 @@
 import gleam/erlang/process
 import gleam/list
 import gleam/option.{Some}
-import nuts2 as nats
+import nuts
 
-pub fn nats_test() {
+pub fn nuts_test() {
   let assert Ok(started) =
-    nats.new("127.0.0.1", 4222)
-    |> nats.client_name("nats_test")
-    |> nats.start
+    nuts.new("127.0.0.1", 4222)
+    |> nuts.client_name("nuts_test")
+    |> nuts.start
 
   let conn = started.data
 
   await_connected(conn)
 
   let assert Ok(Nil) =
-    nats.publish(
+    nuts.publish(
       conn,
-      nats.NatsMessage(
+      nuts.NatsMessage(
         subject: "foo.bar",
         headers: [],
         payload: <<"awesome">>,
@@ -29,7 +29,7 @@ pub fn nats_test() {
   list.range(1, client_count)
   |> list.each(fn(_) {
     process.spawn(fn() {
-      let assert Ok(sub) = nats.subscribe(conn, "foo.baz")
+      let assert Ok(sub) = nuts.subscribe(conn, "foo.baz")
       let assert Ok(_msg) = process.receive(sub, 1000)
         as "should receive a message on sub"
 
@@ -39,13 +39,13 @@ pub fn nats_test() {
   process.sleep(10)
 
   let assert Ok(Nil) =
-    nats.new_message("foo.baz", <<"AWESOME2">>)
-    |> nats.reply_to(Some("hello_world"))
-    |> nats.set_header("encoding", "text/plain")
-    |> nats.publish(conn, _)
+    nuts.new_message("foo.baz", <<"AWESOME2">>)
+    |> nuts.reply_to(Some("hello_world"))
+    |> nuts.set_header("encoding", "text/plain")
+    |> nuts.publish(conn, _)
 
   let assert Ok(_) = receive_count(msgs, client_count, 1000)
-  nats.shutdown(conn)
+  nuts.shutdown(conn)
 }
 
 fn receive_count(subject, count: Int, timeout: Int) {
@@ -64,23 +64,23 @@ fn receive_count(subject, count: Int, timeout: Int) {
 
 pub fn nkey_test() {
   let assert Ok(started) =
-    nats.new("127.0.0.1", 6789)
-    |> nats.nkey_seed(
+    nuts.new("127.0.0.1", 6789)
+    |> nuts.nkey_seed(
       "SUALHP366GCQN53R7X3MJF4BCNEK6WTKATRZ7QAMDC7UTVBMC2WYUDKK64",
     )
-    |> nats.start()
+    |> nuts.start()
 
   let conn = started.data
   await_connected(conn)
 
   let assert Ok(_) =
-    nats.new_message("test.nkey_test", <<"wibble">>)
-    |> nats.publish(conn, _)
+    nuts.new_message("test.nkey_test", <<"wibble">>)
+    |> nuts.publish(conn, _)
     as "should be published"
 }
 
-fn await_connected(conn: process.Subject(nats.Message)) {
-  case nats.is_connected(conn) {
+fn await_connected(conn: process.Subject(nuts.Message)) {
+  case nuts.is_connected(conn) {
     True -> Nil
     False -> {
       process.sleep(10)

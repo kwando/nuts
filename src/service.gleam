@@ -5,7 +5,7 @@ import nuts
 pub fn start(
   nats: process.Subject(nuts.Message),
   service_subject: String,
-  callback: fn(nuts.Event) -> Result(BitArray, Nil),
+  callback: fn(nuts.ReceivedMessage) -> Result(BitArray, Nil),
 ) {
   process.spawn(fn() {
     let assert Ok(service_subject) = nuts.subscribe(nats, service_subject)
@@ -16,15 +16,15 @@ pub fn start(
 
 fn handle(
   conn: process.Subject(nuts.Message),
-  subject: process.Subject(nuts.Event),
-  handler: fn(nuts.Event) -> Result(BitArray, Nil),
+  subject: process.Subject(nuts.ReceivedMessage),
+  handler: fn(nuts.ReceivedMessage) -> Result(BitArray, Nil),
 ) {
   let event = process.receive_forever(subject)
   let _ = case handler(event) {
     Ok(bits) -> {
-      case event.reply_to {
+      case event.message.reply_to {
         option.Some(inbox) -> {
-          nuts.publish_bits(conn, inbox, bits)
+          nuts.publish(conn, nuts.new_message(inbox, bits))
         }
         option.None -> todo
       }

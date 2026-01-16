@@ -1,514 +1,446 @@
-import gleam/bit_array
-import gleam/dict.{type Dict}
+import gleam/dict
 import gleam/erlang/process.{type Subject}
-import gleam/erlang/reference.{type Reference}
-import gleam/function
 import gleam/int
 import gleam/io
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
+import gleam/string
 import mug
-import nuts/connect_options.{ConnectOptions}
+import nuts/connect_options
 import nuts/internal/command
-import nuts/internal/protocol
+import nuts/internal/protocol.{type ServerInfo}
 
 pub opaque type Config {
   Config(
     host: String,
     port: Int,
-    retry_interval: Int,
-    ping_interval: Int,
-    ping_timeout: Int,
-    nkey: Option(String),
+    client_name: Option(String),
+    nkey_seed: Option(String),
   )
 }
 
-type SubscriberRecord {
-  SubscriberRecord(topic: String, subject: Subject(Event))
+pub fn new(host: String, port: Int) -> Config {
+  Config(host, port, client_name: None, nkey_seed: None)
 }
 
-type SubscriberRegistry {
-  SubscriberRegistry(
-    subscriptions: Dict(String, SubscriberRecord),
-    listeners: Dict(process.Monitor, String),
+pub fn client_name(config, client_name: String) {
+  Config(..config, client_name: Some(client_name))
+}
+
+pub fn nkey_seed(config, nkey: String) {
+  Config(..config, nkey_seed: Some(nkey))
+}
+
+pub type NatsError {
+  ConnectionError(mug.Error)
+  NatsError(String)
+  NotConnected
+}
+
+pub opaque type Message {
+  SetupConnection
+  PacketData(mug.TcpMessage)
+  Publish(NatsMessage, reply: Subject(Result(Nil, NatsError)))
+  Subscribe(
+    subject: String,
+    subscriber_subject: Subject(ReceivedMessage),
+    reply: Subject(Result(Subject(ReceivedMessage), Nil)),
+  )
+  SubscriberDown(process.Down)
+  Shutdown(reply: Subject(Result(Nil, NatsError)))
+  IsConnected(reply: Subject(Bool))
+}
+
+type State {
+  State(
+    self: Subject(Message),
+    config: Config,
+    log: fn(String) -> Nil,
+    socket: Option(mug.Socket),
+    buffer: BitArray,
+    next_sid: Int,
+    subscribers: dict.Dict(String, Subscription),
+    authenticated: Bool,
+    server_info: Option(ServerInfo),
   )
 }
 
-pub type Event {
-  Message(
-    topic: String,
+type Subscription {
+  Subscription(
+    sid: String,
+    subject: Subject(ReceivedMessage),
+    monitor: process.Monitor,
+  )
+}
+
+pub fn start(config: Config) {
+  actor.new_with_initialiser(1000, fn(self) {
+    process.send(self, SetupConnection)
+
+    actor.initialised(State(
+      self,
+      config:,
+      log: fn(string) {
+        io.println_error("log: " <> string)
+        Nil
+      },
+      socket: None,
+      buffer: <<>>,
+      next_sid: 1,
+      subscribers: dict.new(),
+      authenticated: False,
+      server_info: None,
+    ))
+    |> actor.returning(self)
+    |> actor.selecting(
+      process.new_selector()
+      |> process.select(self)
+      |> mug.select_tcp_messages(PacketData)
+      |> process.select_monitors(SubscriberDown),
+    )
+    |> Ok
+  })
+  |> actor.on_message(handle_message)
+  |> actor.start()
+}
+
+fn handle_message(state: State, msg: Message) {
+  //echo #(msg, state) as "handle_message"
+  case msg {
+    SetupConnection -> {
+      state.log("setting up connection")
+      let socket_res =
+        mug.new(state.config.host, state.config.port)
+        |> mug.connect()
+
+      case socket_res {
+        Error(error) -> {
+          state.log("failed to make connection\n" <> string.inspect(error))
+          state |> actor.continue()
+        }
+        Ok(socket) -> {
+          mug.receive_next_packet_as_message(socket)
+          State(..state, socket: Some(socket), authenticated: False)
+          |> actor.continue()
+        }
+      }
+    }
+
+    PacketData(mug.Packet(socket, bit_array)) -> {
+      let buffer = <<state.buffer:bits, bit_array:bits>>
+      mug.receive_next_packet_as_message(socket)
+
+      let state = handle_server_messages(state, buffer)
+
+      actor.continue(state)
+    }
+    PacketData(mug.SocketClosed(_socket)) -> {
+      actor.continue(State(..state, socket: None))
+    }
+    PacketData(mug.TcpError(_socket, error)) -> {
+      state.log("tcp error: " <> string.inspect(error))
+      actor.continue(State(..state, socket: None))
+    }
+    Publish(message, reply_to) -> {
+      case state.socket, state.authenticated {
+        None, _ -> {
+          state.log("socket not connected")
+          actor.send(reply_to, Error(NotConnected))
+          actor.continue(state)
+        }
+        Some(_), False -> {
+          state.log("socket not authenticated yet")
+          actor.send(reply_to, Error(NatsError("socket not authenticated")))
+          actor.continue(state)
+        }
+        Some(_), _ -> {
+          let bits = case message.headers {
+            [] ->
+              command.pub_(
+                subject: message.subject,
+                reply_to: message.reply_to,
+                payload: message.payload,
+              )
+            headers ->
+              command.hpub(
+                subject: message.subject,
+                reply_to: message.reply_to,
+                headers: headers,
+                payload: message.payload,
+              )
+          }
+
+          case send_or_disconnect(state, bits) {
+            Error(#(error, state)) -> {
+              state.log("mug error: " <> string.inspect(error))
+              actor.send(reply_to, Error(error))
+              actor.continue(state)
+            }
+            Ok(state) -> {
+              actor.send(reply_to, Ok(Nil))
+              actor.continue(state)
+            }
+          }
+        }
+      }
+    }
+
+    Subscribe(subject:, subscriber_subject:, reply:) -> {
+      let sid_str = int.to_string(state.next_sid)
+      let state = case
+        send_or_disconnect(
+          state,
+          command.sub(subject: subject, sid: sid_str, queue_group: None),
+        )
+      {
+        Error(#(err, state)) -> {
+          state.log("error while subscribing: " <> string.inspect(err))
+          state
+        }
+        Ok(state) -> state
+      }
+
+      let subscribers = case process.subject_owner(subscriber_subject) {
+        Error(_) -> state.subscribers
+        Ok(pid) -> {
+          let monitor = process.monitor(pid)
+          dict.insert(
+            state.subscribers,
+            sid_str,
+            Subscription(sid: sid_str, subject: subscriber_subject, monitor:),
+          )
+        }
+      }
+
+      actor.send(reply, Ok(subscriber_subject))
+      actor.continue(State(..state, next_sid: state.next_sid + 1, subscribers:))
+    }
+    SubscriberDown(down) -> {
+      let subscribers =
+        dict.filter(state.subscribers, fn(sid, subscription) {
+          case subscription.monitor == down.monitor {
+            False -> True
+            True -> {
+              let _ = case state.socket {
+                None -> Ok(Nil)
+                Some(socket) -> {
+                  mug.send(socket, command.unsub(sid, None))
+                }
+              }
+              False
+            }
+          }
+        })
+
+      actor.continue(State(..state, subscribers:))
+    }
+    Shutdown(reply) -> {
+      state.log("connection shutdown")
+
+      case state.socket {
+        None -> Ok(Nil)
+        Some(socket) -> {
+          socket
+          |> mug.shutdown()
+          |> result.map_error(ConnectionError)
+        }
+      }
+      |> actor.send(reply, _)
+      actor.stop()
+    }
+    IsConnected(reply:) -> {
+      actor.send(reply, state.authenticated)
+      actor.continue(state)
+    }
+  }
+}
+
+fn handle_server_messages(state: State, buffer) -> State {
+  case protocol.parse(buffer) {
+    protocol.Continue(cmd, buffer) -> {
+      state.log("server msg: " <> string.inspect(cmd))
+      let updated_state = handle_server_message(state, cmd)
+      handle_server_messages(updated_state, buffer)
+    }
+    protocol.NeedsMoreData -> State(..state, buffer:)
+    protocol.ProtocolError(err) -> {
+      state.log("protocol error: " <> err)
+      state
+    }
+  }
+}
+
+fn handle_server_message(state: State, msg: protocol.ServerMessage) -> State {
+  case msg {
+    protocol.OK -> {
+      case state {
+        State(authenticated: False, socket: Some(..), ..) -> {
+          State(..state, authenticated: True)
+        }
+        _ -> state
+      }
+    }
+    protocol.Info(server_info) -> {
+      let connect_opts =
+        connect_options.ConnectOptions(
+          verbose: False,
+          pedantic: False,
+          tls_required: False,
+          lang: "gleam",
+          version: "0.0.1",
+          headers: True,
+          echo_: False,
+          protocol: 0,
+          auth: case state.config.nkey_seed, server_info.nonce {
+            None, _ -> connect_options.NoAuth
+            Some(nkey_seed), Some(nonce) -> {
+              case connect_options.nkey_auth(nkey_seed, nonce) {
+                Error(err) -> {
+                  state.log(
+                    "failed to authenticate with nkey " <> string.inspect(err),
+                  )
+                  connect_options.NoAuth
+                }
+                Ok(auth) -> auth
+              }
+            }
+            _, _ -> connect_options.NoAuth
+          },
+          name: state.config.client_name
+            |> option.unwrap("Gleam NUTS2"),
+          no_responders: True,
+        )
+
+      case
+        send_or_disconnect(
+          State(..state, authenticated: True, server_info: Some(server_info)),
+          command.connect(connect_opts),
+        )
+      {
+        Error(#(error, state)) -> {
+          state.log(string.inspect(error))
+          state
+        }
+        Ok(state) -> state
+      }
+    }
+    protocol.Msg(..) as m -> {
+      dispatch_message(
+        state,
+        ReceivedMessage(
+          sid: m.sid,
+          conn: state.self,
+          message: NatsMessage(
+            subject: m.topic,
+            headers: [],
+            payload: m.payload,
+            reply_to: m.reply_to,
+          ),
+        ),
+      )
+    }
+    protocol.Hmsg(..) as m -> {
+      dispatch_message(
+        state,
+        ReceivedMessage(
+          sid: m.sid,
+          conn: state.self,
+          message: NatsMessage(
+            subject: m.topic,
+            headers: m.headers,
+            payload: m.payload,
+            reply_to: m.reply_to,
+          ),
+        ),
+      )
+    }
+
+    srv_msg -> {
+      state.log("unhandled server message:" <> string.inspect(srv_msg))
+      state
+    }
+  }
+}
+
+fn dispatch_message(state: State, msg: ReceivedMessage) {
+  case dict.get(state.subscribers, msg.sid) {
+    Error(_) -> state
+    Ok(subscription) -> {
+      actor.send(subscription.subject, msg)
+      state
+    }
+  }
+}
+
+fn send_or_disconnect(
+  state: State,
+  bits: BitArray,
+) -> Result(State, #(NatsError, State)) {
+  state.log("sending " <> string.inspect(bits))
+  case state.socket {
+    None -> Error(#(NotConnected, state))
+    Some(socket) -> {
+      case mug.send(socket, bits) {
+        Error(err) -> {
+          process.send_after(state.self, 1000, SetupConnection)
+          Error(#(
+            ConnectionError(err),
+            State(
+              ..state,
+              authenticated: False,
+              socket: None,
+              server_info: None,
+            ),
+          ))
+        }
+        Ok(_) -> Ok(state)
+      }
+    }
+  }
+}
+
+pub type NatsMessage {
+  NatsMessage(
+    subject: String,
     headers: List(#(String, String)),
     payload: BitArray,
     reply_to: Option(String),
   )
 }
 
-type PingState {
-  PingSent(Reference)
-  PingIdle
+pub type ReceivedMessage {
+  ReceivedMessage(sid: String, conn: Subject(Message), message: NatsMessage)
 }
 
-type ConnectionState {
-  Disconnected
-  Connected(socket: mug.Socket, buffer: BitArray, ping: PingState)
-}
-
-type State {
-  State(
-    config: Config,
-    subscribers: SubscriberRegistry,
-    self: Subject(Message),
-    next_sid: Int,
-    conn: ConnectionState,
-  )
-}
-
-pub opaque type Message {
-  Connect
-  Data(mug.TcpMessage)
-  Publish(
-    topic: String,
-    payload: BitArray,
-    headers: List(#(String, String)),
-    reply: Subject(Result(Nil, Nil)),
-  )
-  Subscribe(
-    topic: String,
-    listener: Subject(Event),
-    reply_to: Subject(Result(Subject(Event), Nil)),
-  )
-  IsConnected(Subject(Bool))
-  Shutdown
-  SendPing
-  GotPong(Reference)
-  PingTimeout(Reference)
-
-  ProcessDown(process.Down)
-}
-
-pub fn new(host: String, port: Int) {
-  Config(
-    host:,
-    port:,
-    retry_interval: 1000,
-    ping_interval: 15_000,
-    ping_timeout: 5000,
-    nkey: None,
-  )
-}
-
-pub fn nkey(config: Config, nkey: String) {
-  Config(..config, nkey: Some(nkey))
-}
-
-pub fn start(config: Config) {
-  actor.new_with_initialiser(1000, fn(self) {
-    actor.send(self, Connect)
-    actor.initialised(State(
-      config,
-      SubscriberRegistry(dict.new(), dict.new()),
-      self: self,
-      next_sid: 1,
-      conn: Disconnected,
-    ))
-    |> actor.selecting(
-      process.new_selector()
-      |> mug.select_tcp_messages(Data)
-      |> process.select_monitors(ProcessDown)
-      |> process.select(self),
-    )
-    |> actor.returning(self)
-    |> Ok
-  })
-  |> actor.on_message(handle_message)
-  |> actor.start()
-  |> result.map(fn(started) { started.data })
-}
-
-fn handle_message(state: State, msg: Message) {
-  case state {
-    State(conn: Connected(socket:, ..) as conn, ..) as state -> {
-      case msg {
-        Data(tcp) -> {
-          mug.receive_next_packet_as_message(socket)
-          case tcp {
-            mug.Packet(_socket, data) -> {
-              let buffer = bit_array.append(conn.buffer, data)
-              case read_protocol_messages(state, buffer) {
-                Ok(state) -> state
-                Error(_) -> disconnect(state)
-              }
-              |> actor.continue
-            }
-            mug.SocketClosed(_) -> {
-              process.send_after(
-                state.self,
-                state.config.retry_interval,
-                Connect,
-              )
-              actor.continue(disconnect(state))
-            }
-            mug.TcpError(_, _) -> {
-              process.send_after(
-                state.self,
-                state.config.retry_interval,
-                Connect,
-              )
-              actor.continue(disconnect(state))
-            }
-          }
-        }
-        Connect -> actor.continue(state)
-        Publish(topic:, payload:, reply:, headers:) -> {
-          let updated_state = case headers {
-            [] ->
-              tcp_send_bits(
-                state,
-                command.pub_(subject: topic, reply_to: None, payload:),
-                function.identity,
-              )
-            headers ->
-              tcp_send_bits(
-                state,
-                command.hpub(subject: topic, reply_to: None, headers:, payload:),
-                function.identity,
-              )
-          }
-
-          actor.send(reply, Ok(Nil))
-          actor.continue(updated_state)
-        }
-        Subscribe(topic, callback, reply_to) -> {
-          let #(sid, updated_state) =
-            register_subscriber(state, topic, callback)
-
-          actor.send(reply_to, Ok(callback))
-          case mug.send(socket, command.sub(topic, sid, None)) {
-            Ok(Nil) -> actor.continue(updated_state)
-            Error(_) -> actor.continue(disconnect(state))
-          }
-        }
-        Shutdown -> actor.stop()
-        IsConnected(reply) -> {
-          process.send(reply, True)
-          actor.continue(state)
-        }
-        SendPing -> {
-          case mug.send(socket, command.ping()) {
-            Ok(Nil) -> {
-              let ping_ref = reference.new()
-              process.send_after(state.self, 2000, PingTimeout(ping_ref))
-              actor.continue(
-                State(
-                  ..state,
-                  conn: Connected(..conn, ping: PingSent(ping_ref)),
-                ),
-              )
-            }
-            Error(_) -> actor.continue(disconnect(state))
-          }
-        }
-        GotPong(ref) -> {
-          case conn.ping {
-            PingSent(ping_ref) if ping_ref == ref -> {
-              process.send_after(
-                state.self,
-                state.config.ping_interval,
-                SendPing,
-              )
-              actor.continue(
-                State(..state, conn: Connected(..conn, ping: PingIdle)),
-              )
-            }
-            PingIdle | PingSent(_) -> actor.continue(state)
-          }
-        }
-        PingTimeout(ref) -> {
-          case conn.ping {
-            PingSent(ping_ref) if ping_ref == ref -> {
-              io.println_error("didnt get Pong on time, disconnecting")
-              disconnect(state) |> actor.continue
-            }
-            PingIdle | PingSent(_) -> actor.continue(state)
-          }
-        }
-        ProcessDown(down) ->
-          state
-          |> unregister_subscriber(down.monitor)
-          |> actor.continue
-      }
-    }
-    State(..) -> {
-      case msg {
-        Connect -> {
-          case setup_connection(state.config) {
-            Ok(socket) -> {
-              mug.receive_next_packet_as_message(socket)
-              case resubscribe(socket, state.subscribers) {
-                Ok(socket) -> {
-                  State(
-                    config: state.config,
-                    next_sid: state.next_sid,
-                    subscribers: state.subscribers,
-                    conn: Connected(
-                      socket: socket,
-                      buffer: <<>>,
-                      ping: PingIdle,
-                    ),
-                    self: state.self,
-                  )
-                  |> actor.continue
-                }
-                Error(_err) -> actor.continue(state)
-              }
-            }
-            Error(_) -> {
-              process.send_after(
-                state.self,
-                state.config.retry_interval,
-                Connect,
-              )
-              actor.continue(state)
-            }
-          }
-        }
-        Subscribe(topic:, listener:, reply_to:) -> {
-          let #(_sid, state) = register_subscriber(state, topic, listener)
-          actor.send(reply_to, Ok(listener))
-          actor.continue(state)
-        }
-        Shutdown -> actor.stop()
-        IsConnected(reply) -> {
-          process.send(reply, False)
-          actor.continue(state)
-        }
-        Data(_) -> actor.continue(state)
-        Publish(reply:, ..) -> {
-          process.send(reply, Error(Nil))
-          actor.continue(state)
-        }
-        SendPing | GotPong(_) | PingTimeout(_) -> actor.continue(state)
-        ProcessDown(down) ->
-          state
-          |> unregister_subscriber(down.monitor)
-          |> actor.continue
-      }
-    }
-  }
-}
-
-//fn send_ping(state: ConnectionState) -> ConnectionState {
-//  case state {
-//    Disconnected -> state
-//    Connected(socket:, ..) ->
-//      case mug.send(socket, command.ping()) {
-//        Ok(Nil) -> Connected(..state, ping: PingSent(reference.new()))
-//        Error(_) -> Disconnected
-//      }
-//  }
-//}
-
-fn update_buffer(conn: ConnectionState, buffer: BitArray) {
-  case conn {
-    Connected(..) -> Connected(..conn, buffer:)
-    Disconnected -> conn
-  }
-}
-
-fn read_protocol_messages(state: State, buffer: BitArray) -> Result(State, Nil) {
-  case protocol.parse(buffer) {
-    protocol.Continue(msg, buffer) ->
-      state
-      |> handle_server_message(msg)
-      |> read_protocol_messages(buffer)
-    protocol.NeedsMoreData ->
-      Ok(State(..state, conn: update_buffer(state.conn, buffer)))
-    protocol.ProtocolError(..) -> Error(Nil)
-  }
-}
-
-fn handle_server_message(state: State, msg) {
-  case msg {
-    protocol.Info(serverinfo) -> {
-      let opts =
-        ConnectOptions(
-          verbose: False,
-          pedantic: False,
-          tls_required: False,
-          lang: "gleam",
-          version: "0.0.0",
-          headers: True,
-          echo_: True,
-          protocol: 0,
-          auth: connect_options.NoAuth,
-          name: "Gleam Nuts NATS",
-          no_responders: True,
-        )
-      let opts = case serverinfo.nonce, state.config.nkey {
-        Some(nonce), Some(nkey) -> {
-          case connect_options.nkey_auth(nkey, nonce) {
-            Error(_) -> opts
-            Ok(auth) -> ConnectOptions(..opts, auth:)
-          }
-        }
-        _, _ -> opts
-      }
-
-      use _ <- tcp_send_bits(state, command.connect(opts))
-      state
-    }
-    protocol.Ping -> {
-      use _ <- tcp_send_bits(state, command.pong())
-      state
-    }
-    protocol.Pong -> {
-      case state.conn {
-        Disconnected -> Nil
-        Connected(ping: PingSent(ping_ref), ..) -> {
-          process.send(state.self, GotPong(ping_ref))
-          Nil
-        }
-        Connected(ping: PingIdle, ..) ->
-          panic as "got unexpected PONG from server"
-      }
-
-      state
-    }
-    protocol.Msg(topic:, payload:, sid:, reply_to:) -> {
-      state |> dispatch_message(sid, topic, [], payload, reply_to)
-    }
-    protocol.Hmsg(topic:, payload:, sid:, headers:, reply_to:) -> {
-      state |> dispatch_message(sid, topic, headers, payload, reply_to)
-    }
-    protocol.ERR(_) -> state
-    protocol.OK -> state
-  }
-}
-
-fn dispatch_message(state: State, sid, topic, headers, payload, reply_to) {
-  case dict.get(state.subscribers.subscriptions, sid) {
-    Ok(subscription) -> {
-      actor.send(
-        subscription.subject,
-        Message(topic, headers, payload, reply_to),
-      )
-      state
-    }
-    Error(_) -> state
-  }
-}
-
-fn disconnect(state: State) {
-  case state.conn {
-    Disconnected -> state
-    Connected(..) -> {
-      process.send_after(state.self, 5000, Connect)
-      State(..state, conn: Disconnected)
-    }
-  }
-}
-
-fn update_subscribers(
-  state: State,
-  update: fn(SubscriberRegistry) -> SubscriberRegistry,
-) {
-  State(..state, subscribers: update(state.subscribers))
-}
-
-fn resubscribe(socket: mug.Socket, subscribers: SubscriberRegistry) {
-  use acc, sid, susbcription <- dict.fold(subscribers.subscriptions, Ok(socket))
-  case acc {
-    Ok(socket) -> {
-      mug.send(socket, <<
-        "SUB ",
-        susbcription.topic:utf8,
-        " ",
-        sid:utf8,
-        "\r\n",
-      >>)
-      |> result.replace(socket)
-    }
-    Error(err) -> Error(err)
-  }
-}
-
-fn register_subscriber(
-  state: State,
-  topic: String,
-  callback: Subject(Event),
-) -> #(String, State) {
-  let sid = state.next_sid |> int.to_string
-  let state =
-    update_subscribers(state, fn(subscribers) {
-      case process.subject_owner(callback) {
-        Error(_) -> subscribers
-        Ok(pid) -> {
-          let monitor = process.monitor(pid)
-          SubscriberRegistry(
-            subscriptions: dict.insert(
-              subscribers.subscriptions,
-              sid,
-              SubscriberRecord(topic, callback),
-            ),
-            listeners: dict.insert(subscribers.listeners, monitor, sid),
-          )
-        }
-      }
-    })
-
-  #(sid, State(..state, next_sid: state.next_sid + 1))
-}
-
-fn unregister_subscriber(state: State, monitor: process.Monitor) {
-  case dict.get(state.subscribers.listeners, monitor) {
-    Error(_) -> state
-    Ok(sid) -> {
-      state
-      |> update_subscribers(fn(reg) {
-        SubscriberRegistry(
-          subscriptions: reg.subscriptions |> dict.delete(sid),
-          listeners: reg.listeners |> dict.delete(monitor),
-        )
-      })
-      |> tcp_send_bits(command.unsub(sid, None), function.identity)
-    }
-  }
-}
-
-fn tcp_send_bits(state: State, data: BitArray, update_state: fn(State) -> State) {
-  case state.conn {
-    Connected(socket:, ..) -> {
-      case mug.send(socket, data) {
-        Ok(Nil) -> update_state(state)
-        Error(_) -> disconnect(state)
-      }
-    }
-    Disconnected -> state
-  }
-}
-
-fn setup_connection(config: Config) {
-  mug.new(config.host, config.port)
-  |> mug.connect()
-}
-
-// -------------------------------- [ PUBLIC API ] --------------------------------------
-pub fn publish_bits(subject: Subject(Message), topic, payload) {
-  actor.call(subject, 5000, Publish(topic:, payload:, reply: _, headers: []))
+pub fn publish(subject: Subject(Message), message: NatsMessage) {
+  actor.call(subject, 1000, Publish(message, _))
 }
 
 pub fn subscribe(
-  subject: Subject(Message),
-  topic: String,
-) -> Result(Subject(Event), Nil) {
-  actor.call(subject, 1000, Subscribe(topic, process.new_subject(), _))
+  conn: Subject(Message),
+  nats_subbject: String,
+) -> Result(Subject(ReceivedMessage), Nil) {
+  let message_subject = process.new_subject()
+  actor.call(conn, 5000, Subscribe(nats_subbject, message_subject, _))
 }
 
-pub fn shutdown(subject: Subject(Message)) {
-  actor.send(subject, Shutdown)
+pub fn new_message(subject: String, payload: BitArray) {
+  NatsMessage(subject:, headers: [], payload:, reply_to: None)
 }
 
-pub fn is_connected(subject: Subject(Message)) {
-  actor.call(subject, 5000, IsConnected)
+pub fn reply_to(message: NatsMessage, reply_to: Option(String)) {
+  NatsMessage(..message, reply_to:)
+}
+
+pub fn set_header(message: NatsMessage, key: String, value: String) {
+  NatsMessage(..message, headers: [#(key, value), ..message.headers])
+}
+
+pub fn shutdown(conn: Subject(Message)) {
+  actor.call(conn, 5000, Shutdown)
+}
+
+pub fn is_connected(conn: Subject(Message)) -> Bool {
+  actor.call(conn, 5000, IsConnected)
 }
