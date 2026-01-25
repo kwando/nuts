@@ -28,6 +28,6 @@ dev:
 
     tmux new-window -t "${session_name}"
     tmux rename-window -t "${session_name}:1" "gleam test"
-    tmux send-keys -t "${session_name}:1.0" 'gleam test' C-m
+    tmux send-keys -t "${session_name}:1.0" 'gleam test_watch' C-m
 
     tmux attach-session -t "${session_name}:0"
