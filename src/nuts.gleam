@@ -17,11 +17,17 @@ pub opaque type Config {
     port: Int,
     client_name: Option(String),
     nkey_seed: Option(String),
+    logger: fn(String) -> Nil,
   )
 }
 
+fn default_logger(value: String) {
+  io.println("log:" <> value)
+  Nil
+}
+
 pub fn new(host: String, port: Int) -> Config {
-  Config(host, port, client_name: None, nkey_seed: None)
+  Config(host, port, client_name: None, nkey_seed: None, logger: default_logger)
 }
 
 pub fn client_name(config, client_name: String) {
@@ -30,6 +36,10 @@ pub fn client_name(config, client_name: String) {
 
 pub fn nkey_seed(config, nkey: String) {
   Config(..config, nkey_seed: Some(nkey))
+}
+
+pub fn logger(config: Config, logger: fn(String) -> Nil) -> Config {
+  Config(..config, logger: logger)
 }
 
 pub type NatsError {
@@ -81,10 +91,7 @@ pub fn start(config: Config) {
     actor.initialised(State(
       self,
       config:,
-      log: fn(string) {
-        io.println_error("log: " <> string)
-        Nil
-      },
+      log: config.logger,
       socket: None,
       buffer: <<>>,
       next_sid: 1,

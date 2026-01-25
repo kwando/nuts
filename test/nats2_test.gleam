@@ -7,6 +7,7 @@ pub fn nuts_test() {
   let assert Ok(started) =
     nuts.new("127.0.0.1", 4222)
     |> nuts.client_name("nuts_test")
+    |> nuts.logger(fn(_) { Nil })
     |> nuts.start
 
   let conn = started.data
@@ -68,6 +69,7 @@ pub fn nkey_test() {
     |> nuts.nkey_seed(
       "SUALHP366GCQN53R7X3MJF4BCNEK6WTKATRZ7QAMDC7UTVBMC2WYUDKK64",
     )
+    |> nuts.logger(fn(_) { Nil })
     |> nuts.start()
 
   let conn = started.data

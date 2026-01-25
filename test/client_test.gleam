@@ -9,6 +9,7 @@ pub fn client_test() {
     |> nuts.nkey_seed(
       "SUALHP366GCQN53R7X3MJF4BCNEK6WTKATRZ7QAMDC7UTVBMC2WYUDKK64",
     )
+    |> nuts.logger(fn(_) { Nil })
     |> nuts.start()
 
   let nats = started.data
@@ -41,6 +42,7 @@ pub fn client_test() {
 pub fn disconnected_client_test() {
   let assert Ok(started) =
     nuts.new("127.0.0.1", 24_823)
+    |> nuts.logger(fn(_) { Nil })
     |> nuts.start()
 
   let nats = started.data
