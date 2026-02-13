@@ -34,6 +34,14 @@ pub fn parse_test() {
   )
 }
 
+pub fn parse_double_messages() {
+  let assert Continue(protocol.Msg("foo", "1", None, <<"bar">>), rest) =
+    protocol.parse(<<"MSG foo 1 3\r\nbar\r\nMSG foo 1 3\r\nbaz\r\n">>)
+
+  let assert Continue(protocol.Msg("foo", "1", None, <<"baz">>), <<>>) =
+    protocol.parse(rest)
+}
+
 pub fn parse_message_with_headers_test() {
   protocol.parse(<<
     "HMSG FOO.BAR alice 34 45\r\nNATS/1.0\r\nFoodGroup: vegetable\r\n\r\nHello World\r\n",

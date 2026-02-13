@@ -113,7 +113,7 @@ pub fn start(config: Config) {
 }
 
 fn handle_message(state: State, msg: Message) {
-  //echo #(msg, state) as "handle_message"
+  echo msg as "---------------------- handle_message ----------------------"
   case msg {
     SetupConnection -> {
       state.log("setting up connection")
@@ -256,11 +256,12 @@ fn handle_message(state: State, msg: Message) {
       |> actor.send(reply, _)
       actor.stop()
     }
-    IsConnected(reply:) -> {
-      actor.send(reply, state.authenticated)
+    IsConnected(reply_sub) -> {
+      actor.send(reply_sub, state.authenticated)
       actor.continue(state)
     }
   }
+  |> echo as "----------------------------------- AFTER handle_message -----------------------------------"
 }
 
 fn handle_server_messages(state: State, buffer) -> State {
@@ -301,6 +302,10 @@ fn handle_server_message(state: State, msg: protocol.ServerMessage) -> State {
           protocol: 0,
           auth: case state.config.nkey_seed, server_info.nonce {
             None, _ -> connect_options.NoAuth
+            Some(_), None -> {
+              state.log("nkey auth configured but got no nonce from the server")
+              connect_options.NoAuth
+            }
             Some(nkey_seed), Some(nonce) -> {
               case connect_options.nkey_auth(nkey_seed, nonce) {
                 Error(err) -> {
@@ -361,6 +366,16 @@ fn handle_server_message(state: State, msg: protocol.ServerMessage) -> State {
           ),
         ),
       )
+    }
+
+    protocol.Ping -> {
+      case send_or_disconnect(state, command.pong()) {
+        Ok(state) -> state
+        Error(#(err, state)) -> {
+          echo err as "ERROR"
+          state
+        }
+      }
     }
 
     srv_msg -> {
@@ -445,9 +460,9 @@ pub fn set_header(message: NatsMessage, key: String, value: String) {
 }
 
 pub fn shutdown(conn: Subject(Message)) {
-  actor.call(conn, 5000, Shutdown)
+  process.call(conn, 5000, Shutdown)
 }
 
 pub fn is_connected(conn: Subject(Message)) -> Bool {
-  actor.call(conn, 5000, IsConnected)
+  process.call(conn, 1000, IsConnected)
 }

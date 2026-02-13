@@ -69,7 +69,10 @@ pub fn to_json_string(options: ConnectOptions) {
   json.to_string(to_json(options))
 }
 
-pub fn nkey_auth(nkey_seed: String, nonce: BitArray) {
+pub fn nkey_auth(
+  nkey_seed: String,
+  nonce: BitArray,
+) -> Result(Auth, nkey.NkeyError) {
   case nkey.from_seed(nkey_seed) {
     Error(err) -> Error(err)
     Ok(keypair) -> {

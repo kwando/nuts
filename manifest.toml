@@ -3,7 +3,9 @@
 
 packages = [
   { name = "base32", version = "1.0.0", build_tools = ["rebar3"], requirements = [], otp_app = "base32", source = "hex", outer_checksum = "0449285348ED0C4CD83C7198E76C5FD5A0451C4EF18695B9FD43792A503E551A" },
+  { name = "child_process", version = "2.0.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_otp", "gleam_stdlib", "splitter"], otp_app = "child_process", source = "hex", outer_checksum = "F8E61B36C48DC5599E2F71FF3F20CF5976D53A367F47395CAC9488A9EC50F370" },
   { name = "cog", version = "2.0.3", build_tools = ["gleam"], requirements = ["filepath", "gleam_stdlib", "glexer", "simplifile"], otp_app = "cog", source = "hex", outer_checksum = "C17C36D0D7383893EFB0E7D11BFA81F2C54AD81F455979D0625E3B8B5AAC5B94" },
+  { name = "exception", version = "2.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "exception", source = "hex", outer_checksum = "329D269D5C2A314F7364BD2711372B6F2C58FA6F39981572E5CA68624D291F8C" },
   { name = "filepath", version = "1.1.2", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "filepath", source = "hex", outer_checksum = "B06A9AF0BF10E51401D64B98E4B627F1D2E48C154967DA7AF4D0914780A6D40A" },
   { name = "gleam_community_ansi", version = "1.4.3", build_tools = ["gleam"], requirements = ["gleam_community_colour", "gleam_regexp", "gleam_stdlib"], otp_app = "gleam_community_ansi", source = "hex", outer_checksum = "8A62AE9CC6EA65BEA630D95016D6C07E4F9973565FA3D0DE68DC4200D8E0DD27" },
   { name = "gleam_community_colour", version = "2.0.2", build_tools = ["gleam"], requirements = ["gleam_json", "gleam_stdlib"], otp_app = "gleam_community_colour", source = "hex", outer_checksum = "E34DD2C896AC3792151EDA939DA435FF3B69922F33415ED3C4406C932FBE9634" },
@@ -21,7 +23,9 @@ packages = [
 
 [requirements]
 base32 = { version = ">= 1.0.0 and < 2.0.0" }
+child_process = { version = ">= 2.0.0 and < 3.0.0" }
 cog = { version = ">= 2.0.3 and < 3.0.0" }
+exception = { version = ">= 2.1.0 and < 3.0.0" }
 gleam_community_ansi = { version = ">= 1.4.3 and < 2.0.0" }
 gleam_erlang = { version = ">= 1.2.0 and < 2.0.0" }
 gleam_json = { version = ">= 3.0.0 and < 4.0.0" }
@@ -29,3 +33,4 @@ gleam_otp = { version = ">= 1.0.0 and < 2.0.0" }
 gleam_stdlib = { version = ">= 0.44.0 and < 2.0.0" }
 gleeunit = { version = ">= 1.0.0 and < 2.0.0" }
 mug = { version = ">= 3.0.0 and < 4.0.0" }
+simplifile = { version = ">= 2.3.2 and < 3.0.0" }

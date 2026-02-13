@@ -1,5 +1,5 @@
-import gleeunit
+import nuts_next_test
 
 pub fn main() {
-  gleeunit.main()
+  nuts_next_test.main()
 }
