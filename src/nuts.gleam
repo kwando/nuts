@@ -298,7 +298,6 @@ fn handle_server_message(state: State, msg: protocol.ServerMessage) -> State {
           lang: "gleam",
           version: "0.0.1",
           headers: True,
-          echo_: False,
           protocol: 0,
           auth: case state.config.nkey_seed, server_info.nonce {
             None, _ -> connect_options.NoAuth

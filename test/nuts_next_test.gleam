@@ -1,9 +1,11 @@
+import gleam/bit_array
 import gleam/erlang/process
+import gleam/int
 import gleam/option.{Some}
 import nuts/test_utils
 import nuts_next as nats
 
-pub fn main_test() {
+pub fn integration_test() {
   use port <- test_utils.with_nats_server()
   let options = nats.new("127.0.0.1", port)
   let name = process.new_name("nats-test")
@@ -48,10 +50,11 @@ pub fn bad_server_test() {
   assert !test_utils.await_connected(conn, 5) as "should not be connected"
 
   let assert Ok(sub) = nats.subscribe(conn, "foo")
+    as "should be able to subscribe when server is offline"
   let assert Ok(Nil) = nats.unsubscribe(conn, sub)
 }
 
-pub fn nkey_auth_test() {
+pub fn nkey_authorization_test() {
   let options =
     nats.new("127.0.0.1", 6789)
     |> nats.nkey_seed(
@@ -64,8 +67,8 @@ pub fn nkey_auth_test() {
   assert test_utils.await_connected(nats_conn, 5) as "not connected to NATS"
 }
 
-pub fn reconnect_test() {
-  let #(port, _subscription, conn) = {
+pub fn reconnect_and_resubscribe_test() {
+  let #(port, subscription, conn) = {
     use port <- test_utils.with_nats_server()
     let name = process.new_name("adsa")
 
@@ -76,26 +79,41 @@ pub fn reconnect_test() {
     let conn = process.named_subject(name)
     assert test_utils.await_connected(conn, 5)
 
+    // make a subscription
     let assert Ok(subscription) =
       conn
       |> nats.subscribe("wobble")
 
     #(port, subscription, conn)
   }
-  process.sleep(1000)
+  assert !test_utils.await_connected(conn, 5) as "should not be connected"
 
+  // start the NATS server again
   {
     use <- test_utils.with_nats_server_on_port(port)
+    assert test_utils.await_connected(conn, 20)
 
+    let expected_payload =
+      int.random(10_000_000) |> int.to_string |> bit_array.from_string
     let assert Ok(_) =
-      nats.new_message("wibble", <<"wobble">>)
+      nats.new_message("wobble", expected_payload)
       |> nats.publish(conn, _)
-      as "publish should work"
+      as "publish on reconnected server should work"
+
+    let assert Ok(nats.NatsMessage(
+      subject: "wobble",
+      reply_to: option.None,
+      headers: [],
+      payload: actual_payload,
+    )) = process.receive(nats.get_subject(subscription), 1000)
+      as "subscription should be resubscribed"
+
+    assert expected_payload == actual_payload
   }
 }
 
 pub fn main() {
-  //main_test()
-  //bad_server_test()
-  nkey_auth_test()
+  let _ = integration_test()
+  let _ = bad_server_test()
+  let _ = reconnect_and_resubscribe_test()
 }

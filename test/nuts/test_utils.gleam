@@ -4,7 +4,6 @@ import exception
 import gleam/bool
 import gleam/erlang/process
 import gleam/int
-import gleam/io
 import gleam/string
 import nuts_next as nats
 import simplifile
@@ -12,14 +11,13 @@ import simplifile
 pub fn with_nats_server_on_port(port: Int, callback: fn() -> a) -> a {
   let self = process.new_subject()
   let assert Ok(server) =
-    child_process.from_file("./wrapper.sh")
-    |> child_process.arg("nats-server")
+    child_process.from_file("/opt/homebrew/bin/nats-server")
     |> child_process.arg2("--port", int.to_string(port))
     |> child_process.arg("--jetstream")
     |> child_process.arg2("--store_dir", "/tmp/jetstream")
+    |> child_process.arg("-VV")
     |> child_process.spawn(
       stdio.lines(fn(line) {
-        io.print_error(line)
         case string.contains(line, "Listening for client connections") {
           False -> Nil
           True -> process.send(self, True)
@@ -28,19 +26,14 @@ pub fn with_nats_server_on_port(port: Int, callback: fn() -> a) -> a {
       }),
     )
 
-  let assert Ok(_) = process.receive(self, 1000)
+  let assert Ok(_) = process.receive(self, 2000)
   exception.defer(
     fn() {
       child_process.stop(server)
       child_process.kill(server)
       let _ = simplifile.delete("/tmp/jetstream")
     },
-    fn() {
-      let data = callback()
-      child_process.stop(server)
-      child_process.kill(server)
-      data
-    },
+    callback,
   )
 }
 
