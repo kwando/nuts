@@ -1,6 +1,6 @@
 import gleam/erlang/process.{type Subject}
 import gleam/option.{None, Some}
-import nuts_next as nats
+import nuts as nats
 
 pub fn main() {
   let name = process.new_name("")

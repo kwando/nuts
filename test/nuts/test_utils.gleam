@@ -5,7 +5,7 @@ import gleam/bool
 import gleam/erlang/process
 import gleam/int
 import gleam/string
-import nuts_next as nats
+import nuts as nats
 import simplifile
 
 pub fn with_nats_server_on_port(port: Int, callback: fn() -> a) -> a {

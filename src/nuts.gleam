@@ -1,466 +1,610 @@
-import gleam/dict
+import gleam/bit_array
+import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/io
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
+import gleam/otp/supervision
 import gleam/result
 import gleam/string
 import mug
-import nuts/connect_options
+import nuts/connect_options.{ConnectOptions}
 import nuts/internal/command
 import nuts/internal/protocol.{type ServerInfo}
 
-pub opaque type Config {
-  Config(
+const actor_timeout = 5000
+
+pub opaque type Options {
+  Options(
     host: String,
     port: Int,
-    client_name: Option(String),
     nkey_seed: Option(String),
-    logger: fn(String) -> Nil,
+    reconnect_interval: Int,
+    logger: Logger,
   )
 }
 
-fn default_logger(value: String) {
-  io.println("log:" <> value)
-  Nil
-}
-
-pub fn new(host: String, port: Int) -> Config {
-  Config(host, port, client_name: None, nkey_seed: None, logger: default_logger)
-}
-
-pub fn client_name(config, client_name: String) {
-  Config(..config, client_name: Some(client_name))
-}
-
-pub fn nkey_seed(config, nkey: String) {
-  Config(..config, nkey_seed: Some(nkey))
-}
-
-pub fn logger(config: Config, logger: fn(String) -> Nil) -> Config {
-  Config(..config, logger: logger)
-}
-
-pub type NatsError {
-  ConnectionError(mug.Error)
-  NatsError(String)
-  NotConnected
-}
-
-pub opaque type Message {
-  SetupConnection
-  PacketData(mug.TcpMessage)
-  Publish(NatsMessage, reply: Subject(Result(Nil, NatsError)))
-  Subscribe(
-    subject: String,
-    subscriber_subject: Subject(ReceivedMessage),
-    reply: Subject(Result(Subject(ReceivedMessage), Nil)),
-  )
-  SubscriberDown(process.Down)
-  Shutdown(reply: Subject(Result(Nil, NatsError)))
-  IsConnected(reply: Subject(Bool))
-}
-
-type State {
-  State(
-    self: Subject(Message),
-    config: Config,
-    log: fn(String) -> Nil,
-    socket: Option(mug.Socket),
-    buffer: BitArray,
-    next_sid: Int,
-    subscribers: dict.Dict(String, Subscription),
-    authenticated: Bool,
-    server_info: Option(ServerInfo),
+pub fn new(host: String, port: Int) -> Options {
+  Options(
+    host:,
+    port:,
+    nkey_seed: None,
+    reconnect_interval: 1000,
+    logger: noop_logger(),
   )
 }
 
-type Subscription {
-  Subscription(
-    sid: String,
-    subject: Subject(ReceivedMessage),
-    monitor: process.Monitor,
-  )
+pub fn nkey_seed(options: Options, string: String) -> Options {
+  Options(..options, nkey_seed: Some(string))
 }
 
-pub fn start(config: Config) {
-  actor.new_with_initialiser(1000, fn(self) {
-    process.send(self, SetupConnection)
-
-    actor.initialised(State(
-      self,
-      config:,
-      log: config.logger,
-      socket: None,
-      buffer: <<>>,
-      next_sid: 1,
-      subscribers: dict.new(),
-      authenticated: False,
-      server_info: None,
-    ))
-    |> actor.returning(self)
-    |> actor.selecting(
-      process.new_selector()
-      |> process.select(self)
-      |> mug.select_tcp_messages(PacketData)
-      |> process.select_monitors(SubscriberDown),
-    )
-    |> Ok
-  })
-  |> actor.on_message(handle_message)
-  |> actor.start()
-}
-
-fn handle_message(state: State, msg: Message) {
-  echo msg as "---------------------- handle_message ----------------------"
-  case msg {
-    SetupConnection -> {
-      state.log("setting up connection")
-      let socket_res =
-        mug.new(state.config.host, state.config.port)
-        |> mug.connect()
-
-      case socket_res {
-        Error(error) -> {
-          state.log("failed to make connection\n" <> string.inspect(error))
-          state |> actor.continue()
-        }
-        Ok(socket) -> {
-          mug.receive_next_packet_as_message(socket)
-          State(..state, socket: Some(socket), authenticated: False)
-          |> actor.continue()
-        }
-      }
-    }
-
-    PacketData(mug.Packet(socket, bit_array)) -> {
-      let buffer = <<state.buffer:bits, bit_array:bits>>
-      mug.receive_next_packet_as_message(socket)
-
-      let state = handle_server_messages(state, buffer)
-
-      actor.continue(state)
-    }
-    PacketData(mug.SocketClosed(_socket)) -> {
-      actor.continue(State(..state, socket: None))
-    }
-    PacketData(mug.TcpError(_socket, error)) -> {
-      state.log("tcp error: " <> string.inspect(error))
-      actor.continue(State(..state, socket: None))
-    }
-    Publish(message, reply_to) -> {
-      case state.socket, state.authenticated {
-        None, _ -> {
-          state.log("socket not connected")
-          actor.send(reply_to, Error(NotConnected))
-          actor.continue(state)
-        }
-        Some(_), False -> {
-          state.log("socket not authenticated yet")
-          actor.send(reply_to, Error(NatsError("socket not authenticated")))
-          actor.continue(state)
-        }
-        Some(_), _ -> {
-          let bits = case message.headers {
-            [] ->
-              command.pub_(
-                subject: message.subject,
-                reply_to: message.reply_to,
-                payload: message.payload,
-              )
-            headers ->
-              command.hpub(
-                subject: message.subject,
-                reply_to: message.reply_to,
-                headers: headers,
-                payload: message.payload,
-              )
-          }
-
-          case send_or_disconnect(state, bits) {
-            Error(#(error, state)) -> {
-              state.log("mug error: " <> string.inspect(error))
-              actor.send(reply_to, Error(error))
-              actor.continue(state)
-            }
-            Ok(state) -> {
-              actor.send(reply_to, Ok(Nil))
-              actor.continue(state)
-            }
-          }
-        }
-      }
-    }
-
-    Subscribe(subject:, subscriber_subject:, reply:) -> {
-      let sid_str = int.to_string(state.next_sid)
-      let state = case
-        send_or_disconnect(
-          state,
-          command.sub(subject: subject, sid: sid_str, queue_group: None),
-        )
-      {
-        Error(#(err, state)) -> {
-          state.log("error while subscribing: " <> string.inspect(err))
-          state
-        }
-        Ok(state) -> state
-      }
-
-      let subscribers = case process.subject_owner(subscriber_subject) {
-        Error(_) -> state.subscribers
-        Ok(pid) -> {
-          let monitor = process.monitor(pid)
-          dict.insert(
-            state.subscribers,
-            sid_str,
-            Subscription(sid: sid_str, subject: subscriber_subject, monitor:),
-          )
-        }
-      }
-
-      actor.send(reply, Ok(subscriber_subject))
-      actor.continue(State(..state, next_sid: state.next_sid + 1, subscribers:))
-    }
-    SubscriberDown(down) -> {
-      let subscribers =
-        dict.filter(state.subscribers, fn(sid, subscription) {
-          case subscription.monitor == down.monitor {
-            False -> True
-            True -> {
-              let _ = case state.socket {
-                None -> Ok(Nil)
-                Some(socket) -> {
-                  mug.send(socket, command.unsub(sid, None))
-                }
-              }
-              False
-            }
-          }
-        })
-
-      actor.continue(State(..state, subscribers:))
-    }
-    Shutdown(reply) -> {
-      state.log("connection shutdown")
-
-      case state.socket {
-        None -> Ok(Nil)
-        Some(socket) -> {
-          socket
-          |> mug.shutdown()
-          |> result.map_error(ConnectionError)
-        }
-      }
-      |> actor.send(reply, _)
-      actor.stop()
-    }
-    IsConnected(reply_sub) -> {
-      actor.send(reply_sub, state.authenticated)
-      actor.continue(state)
-    }
-  }
-  |> echo as "----------------------------------- AFTER handle_message -----------------------------------"
-}
-
-fn handle_server_messages(state: State, buffer) -> State {
-  case protocol.parse(buffer) {
-    protocol.Continue(cmd, buffer) -> {
-      state.log("server msg: " <> string.inspect(cmd))
-      let updated_state = handle_server_message(state, cmd)
-      handle_server_messages(updated_state, buffer)
-    }
-    protocol.NeedsMoreData -> State(..state, buffer:)
-    protocol.ProtocolError(err) -> {
-      state.log("protocol error: " <> err)
-      state
-    }
-  }
-}
-
-fn handle_server_message(state: State, msg: protocol.ServerMessage) -> State {
-  case msg {
-    protocol.OK -> {
-      case state {
-        State(authenticated: False, socket: Some(..), ..) -> {
-          State(..state, authenticated: True)
-        }
-        _ -> state
-      }
-    }
-    protocol.Info(server_info) -> {
-      let connect_opts =
-        connect_options.ConnectOptions(
-          verbose: False,
-          pedantic: False,
-          tls_required: False,
-          lang: "gleam",
-          version: "0.0.1",
-          headers: True,
-          protocol: 0,
-          auth: case state.config.nkey_seed, server_info.nonce {
-            None, _ -> connect_options.NoAuth
-            Some(_), None -> {
-              state.log("nkey auth configured but got no nonce from the server")
-              connect_options.NoAuth
-            }
-            Some(nkey_seed), Some(nonce) -> {
-              case connect_options.nkey_auth(nkey_seed, nonce) {
-                Error(err) -> {
-                  state.log(
-                    "failed to authenticate with nkey " <> string.inspect(err),
-                  )
-                  connect_options.NoAuth
-                }
-                Ok(auth) -> auth
-              }
-            }
-          },
-          name: state.config.client_name
-            |> option.unwrap("Gleam NUTS2"),
-          no_responders: True,
-        )
-
-      case
-        send_or_disconnect(
-          State(..state, authenticated: True, server_info: Some(server_info)),
-          command.connect(connect_opts),
-        )
-      {
-        Error(#(error, state)) -> {
-          state.log(string.inspect(error))
-          state
-        }
-        Ok(state) -> state
-      }
-    }
-    protocol.Msg(..) as m -> {
-      dispatch_message(
-        state,
-        ReceivedMessage(
-          sid: m.sid,
-          conn: state.self,
-          message: NatsMessage(
-            subject: m.topic,
-            headers: [],
-            payload: m.payload,
-            reply_to: m.reply_to,
-          ),
-        ),
-      )
-    }
-    protocol.Hmsg(..) as m -> {
-      dispatch_message(
-        state,
-        ReceivedMessage(
-          sid: m.sid,
-          conn: state.self,
-          message: NatsMessage(
-            subject: m.topic,
-            headers: m.headers,
-            payload: m.payload,
-            reply_to: m.reply_to,
-          ),
-        ),
-      )
-    }
-
-    protocol.Ping -> {
-      case send_or_disconnect(state, command.pong()) {
-        Ok(state) -> state
-        Error(#(err, state)) -> {
-          echo err as "ERROR"
-          state
-        }
-      }
-    }
-
-    srv_msg -> {
-      state.log("unhandled server message:" <> string.inspect(srv_msg))
-      state
-    }
-  }
-}
-
-fn dispatch_message(state: State, msg: ReceivedMessage) {
-  case dict.get(state.subscribers, msg.sid) {
-    Error(_) -> state
-    Ok(subscription) -> {
-      actor.send(subscription.subject, msg)
-      state
-    }
-  }
-}
-
-fn send_or_disconnect(
-  state: State,
-  bits: BitArray,
-) -> Result(State, #(NatsError, State)) {
-  state.log("sending " <> string.inspect(bits))
-  case state.socket {
-    None -> Error(#(NotConnected, state))
-    Some(socket) -> {
-      case mug.send(socket, bits) {
-        Error(err) -> {
-          process.send_after(state.self, 1000, SetupConnection)
-          Error(#(
-            ConnectionError(err),
-            State(
-              ..state,
-              authenticated: False,
-              socket: None,
-              server_info: None,
-            ),
-          ))
-        }
-        Ok(_) -> Ok(state)
-      }
-    }
-  }
+pub fn with_logger(options: Options, logger: Logger) {
+  Options(..options, logger:)
 }
 
 pub type NatsMessage {
   NatsMessage(
     subject: String,
+    reply_to: Option(String),
     headers: List(#(String, String)),
     payload: BitArray,
-    reply_to: Option(String),
   )
 }
 
-pub type ReceivedMessage {
-  ReceivedMessage(sid: String, conn: Subject(Message), message: NatsMessage)
+pub type NatsError {
+  NotConnected
+  NetworkError(mug.Error)
+  ProtocolError(String)
+  AuthenticationFailed
+  GenericError(String)
 }
 
-pub fn publish(subject: Subject(Message), message: NatsMessage) {
-  actor.call(subject, 1000, Publish(message, _))
+pub opaque type Message {
+  Connect
+  IsConnected(Subject(Bool))
+  Publish(NatsMessage, Subject(Result(Nil, NatsError)))
+  Subscribe(
+    subject: String,
+    subscriber: Subject(NatsMessage),
+    reply: Subject(Result(Subscription, NatsError)),
+  )
+  SocketData(mug.TcpMessage)
+  SubscriberDown(process.Down)
+  Unsubscribe(Subscription, Subject(Result(Nil, NatsError)))
+  Shutdown(Subject(Nil))
 }
 
-pub fn subscribe(
-  conn: Subject(Message),
-  nats_subbject: String,
-) -> Result(Subject(ReceivedMessage), Nil) {
-  let message_subject = process.new_subject()
-  actor.call(conn, 5000, Subscribe(nats_subbject, message_subject, _))
+type Subscriber {
+  Subscriber(
+    sid: String,
+    monitor: process.Monitor,
+    subject: Subject(NatsMessage),
+    pattern: String,
+  )
 }
 
-pub fn new_message(subject: String, payload: BitArray) {
-  NatsMessage(subject:, headers: [], payload:, reply_to: None)
+pub opaque type Subscription {
+  Subscription(subscriber: Subscriber)
+}
+
+pub fn get_subject(subscription: Subscription) {
+  subscription.subscriber.subject
+}
+
+// ------------------------------------------- SubscriberMap -------------------------------------------
+type SubscriberMap {
+  SubscriberMap(
+    sids: Dict(String, Subscriber),
+    monitors: Dict(process.Monitor, Subscriber),
+  )
+}
+
+fn new_subscriber_map() {
+  SubscriberMap(sids: dict.new(), monitors: dict.new())
+}
+
+fn add_subscriber(map: SubscriberMap, subscriber: Subscriber) {
+  assert !dict.has_key(map.sids, subscriber.sid)
+    as { "sid " <> subscriber.sid <> " already registered" }
+  assert !dict.has_key(map.monitors, subscriber.monitor)
+    as "monitor already registered"
+  SubscriberMap(
+    sids: dict.insert(map.sids, subscriber.sid, subscriber),
+    monitors: dict.insert(map.monitors, subscriber.monitor, subscriber),
+  )
+}
+
+fn remove_subscriber(map: SubscriberMap, subscriber: Subscriber) {
+  SubscriberMap(
+    sids: dict.delete(map.sids, subscriber.sid),
+    monitors: dict.delete(map.monitors, subscriber.monitor),
+  )
+}
+
+fn get_subscriber_by_sid(
+  map: SubscriberMap,
+  sid: String,
+) -> Result(Subscriber, Nil) {
+  dict.get(map.sids, sid)
+}
+
+fn get_subscriber_by_monitor(
+  map: SubscriberMap,
+  monitor: process.Monitor,
+) -> Result(Subscriber, Nil) {
+  dict.get(map.monitors, monitor)
+}
+
+fn update_subscribers(
+  state: ClientState,
+  callback: fn(SubscriberMap) -> SubscriberMap,
+) {
+  ClientState(..state, subscribers: callback(state.subscribers))
+}
+
+//------------------------------------------- NatsConnection -------------------------------------------
+
+type ClientState {
+  ClientState(
+    options: Options,
+    socket: Option(mug.Socket),
+    buffer: BitArray,
+    server_info: Option(ServerInfo),
+    subscribers: SubscriberMap,
+    next_sid: Int,
+    self: Subject(Message),
+    logger: Logger,
+    connection_attempt: Int,
+  )
+}
+
+pub fn start(process_name: process.Name(Message), options: Options) {
+  actor.new_with_initialiser(actor_timeout, fn(self) {
+    actor.send(self, Connect)
+
+    actor.initialised(ClientState(
+      options,
+      socket: None,
+      buffer: <<>>,
+      server_info: None,
+      subscribers: new_subscriber_map(),
+      next_sid: 1,
+      self:,
+      logger: options.logger,
+      connection_attempt: 1,
+    ))
+    |> actor.selecting(
+      process.new_selector()
+      |> process.select(self)
+      |> process.select_monitors(SubscriberDown)
+      |> mug.select_tcp_messages(SocketData),
+    )
+    |> Ok
+  })
+  |> actor.named(process_name)
+  |> actor.on_message(handle_message)
+  |> actor.start
+}
+
+pub fn supervised(
+  name: process.Name(Message),
+  options: Options,
+) -> supervision.ChildSpecification(Nil) {
+  supervision.worker(fn() { start(name, options) })
+}
+
+fn handle_message(
+  state: ClientState,
+  msg: Message,
+) -> actor.Next(ClientState, a) {
+  case msg {
+    Connect -> {
+      state
+      |> setup_connection
+      |> actor.continue
+    }
+    IsConnected(reply) -> {
+      actor.send(reply, state.socket != None && state.server_info != None)
+      actor.continue(state)
+    }
+    Publish(msg, reply) -> {
+      case state.socket {
+        Some(_) -> {
+          let bytes = case msg.headers {
+            [] -> command.pub_(msg.subject, msg.reply_to, msg.payload)
+
+            headers ->
+              command.hpub(msg.subject, msg.reply_to, headers, msg.payload)
+          }
+
+          case send_bits(state, bytes) {
+            Ok(_) -> {
+              actor.send(reply, Ok(Nil))
+              actor.continue(state)
+            }
+            Error(error) -> {
+              actor.send(reply, Error(error))
+              state
+              |> close_connection()
+              |> actor.continue()
+            }
+          }
+        }
+        None -> {
+          actor.send(reply, Error(NotConnected))
+          actor.continue(state)
+        }
+      }
+    }
+    SocketData(mug_message) ->
+      case mug_message {
+        mug.Packet(socket, data) -> {
+          mug.receive_next_packet_as_message(socket)
+          let buffer = bit_array.append(state.buffer, data)
+          case parse_server_messages(state, buffer) {
+            Ok(state) -> actor.continue(state)
+            Error(err) -> {
+              state.logger.debug(
+                "parse_server_messages: " <> string.inspect(err),
+              )
+
+              state
+              |> close_connection
+              |> actor.continue
+            }
+          }
+        }
+        mug.SocketClosed(_) | mug.TcpError(_, _) -> {
+          state.logger.debug("socket closed")
+          state
+          |> close_connection
+          |> actor.continue
+        }
+      }
+    Subscribe(subject:, subscriber:, reply:) -> {
+      let sid = state.next_sid |> int.to_base36
+      case process.subject_owner(subscriber) {
+        Ok(pid) -> {
+          let monitor = process.monitor(pid)
+
+          let state = ClientState(..state, next_sid: state.next_sid + 1)
+          let subscriber =
+            Subscriber(sid:, monitor:, subject: subscriber, pattern: subject)
+          actor.send(reply, Ok(Subscription(subscriber:)))
+          let state =
+            state
+            |> update_subscribers(add_subscriber(_, subscriber))
+
+          case
+            send_bits(state, command.sub(subject:, sid:, queue_group: None))
+          {
+            Ok(Nil) -> {
+              actor.continue(state)
+            }
+            Error(err) -> {
+              state.logger.warning(
+                "failed setup subscription on server: " <> string.inspect(err),
+              )
+              state
+              |> close_connection()
+              |> actor.continue
+            }
+          }
+        }
+        // the process is already dead, so no idea to setup a subscription
+        Error(Nil) -> {
+          actor.send(reply, Error(GenericError("subscriber is down")))
+          actor.continue(state)
+        }
+      }
+    }
+    SubscriberDown(down) -> {
+      case get_subscriber_by_monitor(state.subscribers, down.monitor) {
+        Ok(subscriber) -> {
+          let _ = send_bits(state, command.unsub(subscriber.sid, None))
+
+          state
+          |> update_subscribers(remove_subscriber(_, subscriber))
+          |> actor.continue()
+        }
+        Error(_) -> actor.continue(state)
+      }
+    }
+    Unsubscribe(subscription, reply) -> {
+      case
+        get_subscriber_by_sid(state.subscribers, subscription.subscriber.sid)
+      {
+        Ok(subscriber) -> {
+          case send_bits(state, command.unsub(subscriber.sid, None)) {
+            Ok(_) | Error(NotConnected) -> {
+              actor.send(reply, Ok(Nil))
+              actor.continue(
+                state
+                |> update_subscribers(remove_subscriber(_, subscriber)),
+              )
+            }
+            Error(_) -> {
+              actor.send(reply, Error(GenericError("subscriber not found")))
+              actor.continue(
+                close_connection(state)
+                |> update_subscribers(remove_subscriber(_, subscriber)),
+              )
+            }
+          }
+        }
+        Error(_) -> {
+          actor.send(reply, Ok(Nil))
+          actor.continue(state)
+        }
+      }
+    }
+    Shutdown(reply) -> {
+      actor.send(reply, Nil)
+      actor.stop()
+    }
+  }
+}
+
+fn close_connection(state: ClientState) {
+  state.logger.debug("close connection")
+  case state.socket {
+    Some(socket) -> {
+      let _ = mug.shutdown(socket)
+
+      ClientState(
+        ..state,
+        socket: None,
+        server_info: None,
+        connection_attempt: 1,
+      )
+      |> setup_connection
+    }
+    None -> state
+  }
+}
+
+fn schedule_reconnect(state: ClientState) {
+  process.send_after(state.self, state.options.reconnect_interval, Connect)
+  state
+}
+
+fn parse_server_messages(state, buffer) -> Result(ClientState, NatsError) {
+  case protocol.parse(buffer) {
+    protocol.Continue(message, remaining_bytes) -> {
+      let state = ClientState(..state, buffer: remaining_bytes)
+      case handle_server_message(state, message) {
+        Ok(state) -> parse_server_messages(state, remaining_bytes)
+        Error(err) -> Error(err)
+      }
+    }
+    protocol.ProtocolError(error) -> Error(ProtocolError(error))
+    protocol.NeedsMoreData -> ClientState(..state, buffer:) |> Ok
+  }
+}
+
+fn send_bits(state: ClientState, bits: BitArray) {
+  state.logger.debug(
+    ">>"
+    <> bit_array.to_string(bits) |> result.unwrap("<<binary is not a string>>"),
+  )
+  case state.socket {
+    Some(socket) -> {
+      socket
+      |> mug.send(bits)
+      |> result.map_error(NetworkError)
+    }
+    None -> Error(NotConnected)
+  }
+}
+
+fn handle_server_message(
+  state: ClientState,
+  message: protocol.ServerMessage,
+) -> Result(ClientState, NatsError) {
+  case message {
+    protocol.Info(server_info) -> {
+      let auth = case state.options.nkey_seed, server_info.nonce {
+        Some(nkey), Some(nonce) -> connect_options.nkey_auth(nkey, nonce)
+        _, _ -> Ok(connect_options.NoAuth)
+      }
+
+      case auth {
+        Ok(auth) -> {
+          case
+            send_bits(
+              state,
+              command.connect(ConnectOptions(
+                verbose: False,
+                pedantic: True,
+                tls_required: False,
+                lang: "gleam",
+                version: "0.0.1",
+                headers: True,
+                protocol: 0,
+                auth:,
+                name: "nuts",
+                no_responders: True,
+              )),
+            )
+          {
+            Ok(_) -> {
+              ClientState(..state, server_info: Some(server_info))
+              |> resubscribe
+            }
+            Error(err) -> Error(err)
+          }
+        }
+        Error(err) -> {
+          state.logger.debug(string.inspect(err))
+          Error(AuthenticationFailed)
+        }
+      }
+    }
+    protocol.Ping -> {
+      case send_bits(state, command.pong()) {
+        Ok(_) -> Ok(state)
+        Error(err) -> Error(err)
+      }
+    }
+    protocol.Pong -> Ok(state)
+    protocol.Msg(topic:, sid:, reply_to:, payload:) -> {
+      broadcast_message(
+        state,
+        sid,
+        NatsMessage(subject: topic, reply_to:, headers: [], payload:),
+      )
+    }
+    protocol.Hmsg(topic:, headers:, sid:, reply_to:, payload:) -> {
+      broadcast_message(
+        state,
+        sid,
+        NatsMessage(subject: topic, reply_to:, headers:, payload:),
+      )
+    }
+    protocol.OK -> Ok(state)
+    protocol.ERR(error) -> Error(ProtocolError(error))
+  }
+}
+
+fn resubscribe(state: ClientState) -> Result(ClientState, NatsError) {
+  let subscribers = state.subscribers.sids |> dict.values
+
+  let command =
+    list.fold(subscribers, <<>>, fn(acc, subscriber) {
+      bit_array.append(
+        acc,
+        command.sub(
+          subject: subscriber.pattern,
+          sid: subscriber.sid,
+          queue_group: None,
+        ),
+      )
+    })
+
+  case command {
+    <<>> -> Ok(state)
+    command ->
+      send_bits(state, command)
+      |> result.replace(state)
+  }
+}
+
+fn broadcast_message(state: ClientState, sid: String, nats_message: NatsMessage) {
+  case get_subscriber_by_sid(state.subscribers, sid) {
+    Ok(subscriber) -> {
+      actor.send(subscriber.subject, nats_message)
+      Ok(state)
+    }
+
+    Error(Nil) -> {
+      state.logger.warning("message received but but no subscription found")
+      Ok(state)
+    }
+  }
+}
+
+fn setup_connection(state: ClientState) {
+  state.logger.debug(
+    "setup connection " <> int.to_string(state.connection_attempt),
+  )
+  assert state.socket == None as "cant reconnect when there is an open socket"
+
+  let socket =
+    mug.new(state.options.host, state.options.port)
+    |> mug.connect
+
+  case socket {
+    Ok(socket) -> {
+      mug.receive_next_packet_as_message(socket)
+      state.logger.debug(
+        "socket opened to "
+        <> state.options.host
+        <> ":"
+        <> int.to_string(state.options.port),
+      )
+      ClientState(..state, socket: Some(socket))
+    }
+    Error(err) -> {
+      state.logger.debug("failed to connect: " <> string.inspect(err))
+      ClientState(
+        ..state,
+        socket: None,
+        connection_attempt: state.connection_attempt + 1,
+      )
+      |> schedule_reconnect
+    }
+  }
+}
+
+// message API
+pub fn new_message(subject: String, payload: BitArray) -> NatsMessage {
+  NatsMessage(subject:, payload:, headers: [], reply_to: None)
 }
 
 pub fn reply_to(message: NatsMessage, reply_to: Option(String)) {
   NatsMessage(..message, reply_to:)
 }
 
-pub fn set_header(message: NatsMessage, key: String, value: String) {
-  NatsMessage(..message, headers: [#(key, value), ..message.headers])
+pub fn add_header(message: NatsMessage, header: String, value: String) {
+  NatsMessage(..message, headers: [#(header, value), ..message.headers])
 }
 
-pub fn shutdown(conn: Subject(Message)) {
-  process.call(conn, 5000, Shutdown)
+// --- client API
+pub fn is_connected(subject: Subject(Message)) -> Bool {
+  actor.call(subject, actor_timeout, IsConnected)
 }
 
-pub fn is_connected(conn: Subject(Message)) -> Bool {
-  process.call(conn, 1000, IsConnected)
+pub fn publish(
+  subject: Subject(Message),
+  message: NatsMessage,
+) -> Result(Nil, NatsError) {
+  actor.call(subject, actor_timeout, Publish(message, _))
+}
+
+pub fn subscribe(
+  conn: Subject(Message),
+  nats_subject: String,
+) -> Result(Subscription, NatsError) {
+  let subscriber = process.new_subject()
+  actor.call(conn, actor_timeout, Subscribe(nats_subject, subscriber:, reply: _))
+}
+
+pub fn unsubscribe(conn: Subject(Message), subscription: Subscription) {
+  actor.call(conn, actor_timeout, Unsubscribe(subscription, _))
+}
+
+pub fn shutdown(conn: Subject(Message)) -> Nil {
+  actor.call(conn, actor_timeout, Shutdown)
+}
+
+// Logger
+pub type Logger {
+  Logger(
+    info: fn(String) -> Nil,
+    debug: fn(String) -> Nil,
+    warning: fn(String) -> Nil,
+  )
+}
+
+fn noop(_) {
+  Nil
+}
+
+fn stderr_log(msg) {
+  io.println_error(msg)
+}
+
+fn add_context(log: fn(String) -> Nil, context) {
+  fn(line) { log(context <> line) }
+}
+
+pub fn noop_logger() {
+  Logger(info: noop, debug: noop, warning: noop)
+}
+
+pub fn default_logger(context: String) {
+  let output = add_context(stderr_log, context)
+  Logger(info: output, debug: output, warning: output)
 }

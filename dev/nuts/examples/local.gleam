@@ -5,22 +5,21 @@ import gleam_community/ansi
 import nuts
 
 pub fn main() {
-  let assert Ok(started) = nuts.start(nuts.new("127.0.0.1", 4222))
-  let nats = started.data
+  let name = process.new_name("local-nats")
+  let assert Ok(_started) = nuts.start(name, nuts.new("127.0.0.1", 4222))
+  let nats = process.named_subject(name)
 
   let assert Ok(me) = nuts.subscribe(nats, ">")
 
-  loop(me)
+  loop(me |> nuts.get_subject)
 }
 
-fn loop(subject: process.Subject(nuts.ReceivedMessage)) {
+fn loop(subject: process.Subject(nuts.NatsMessage)) {
   case process.receive(subject, 1000) {
     Error(_) -> loop(subject)
     Ok(event) -> {
       io.println(
-        ansi.green(event.message.subject)
-        <> " "
-        <> event.message.payload |> string.inspect,
+        ansi.green(event.subject) <> " " <> event.payload |> string.inspect,
       )
       loop(subject)
     }

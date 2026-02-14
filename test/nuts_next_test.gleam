@@ -2,8 +2,8 @@ import gleam/bit_array
 import gleam/erlang/process
 import gleam/int
 import gleam/option.{Some}
+import nuts as nats
 import nuts/test_utils
-import nuts_next as nats
 
 pub fn integration_test() {
   use port <- test_utils.with_nats_server()
