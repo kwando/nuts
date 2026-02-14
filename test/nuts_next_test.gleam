@@ -51,8 +51,21 @@ pub fn bad_server_test() {
   let assert Ok(Nil) = nats.unsubscribe(conn, sub)
 }
 
+pub fn nkey_auth_test() {
+  let options =
+    nats.new("127.0.0.1", 6789)
+    |> nats.nkey_seed(
+      "SUALHP366GCQN53R7X3MJF4BCNEK6WTKATRZ7QAMDC7UTVBMC2WYUDKK64",
+    )
+  let name = process.new_name("nats-test")
+  let nats_conn = process.named_subject(name)
+
+  let assert Ok(_) = nats.start(name, options)
+  assert test_utils.await_connected(nats_conn, 5) as "not connected to NATS"
+}
+
 pub fn reconnect_test() {
-  let #(port, subscription, conn) = {
+  let #(port, _subscription, conn) = {
     use port <- test_utils.with_nats_server()
     let name = process.new_name("adsa")
 
@@ -72,7 +85,7 @@ pub fn reconnect_test() {
   process.sleep(1000)
 
   {
-    use port <- test_utils.with_nats_server_on_port(port)
+    use <- test_utils.with_nats_server_on_port(port)
 
     let assert Ok(_) =
       nats.new_message("wibble", <<"wobble">>)
@@ -84,5 +97,5 @@ pub fn reconnect_test() {
 pub fn main() {
   //main_test()
   //bad_server_test()
-  reconnect_test()
+  nkey_auth_test()
 }

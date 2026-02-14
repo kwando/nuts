@@ -317,7 +317,6 @@ fn handle_server_message(state: State, msg: protocol.ServerMessage) -> State {
                 Ok(auth) -> auth
               }
             }
-            _, _ -> connect_options.NoAuth
           },
           name: state.config.client_name
             |> option.unwrap("Gleam NUTS2"),

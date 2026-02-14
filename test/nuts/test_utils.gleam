@@ -9,7 +9,7 @@ import gleam/string
 import nuts_next as nats
 import simplifile
 
-pub fn with_nats_server_on_port(port: Int, callback: fn(Int) -> a) -> a {
+pub fn with_nats_server_on_port(port: Int, callback: fn() -> a) -> a {
   let self = process.new_subject()
   let assert Ok(server) =
     child_process.from_file("./wrapper.sh")
@@ -36,7 +36,7 @@ pub fn with_nats_server_on_port(port: Int, callback: fn(Int) -> a) -> a {
       let _ = simplifile.delete("/tmp/jetstream")
     },
     fn() {
-      let data = callback(port)
+      let data = callback()
       child_process.stop(server)
       child_process.kill(server)
       data
@@ -46,7 +46,7 @@ pub fn with_nats_server_on_port(port: Int, callback: fn(Int) -> a) -> a {
 
 pub fn with_nats_server(callback: fn(Int) -> a) -> a {
   let port = int.random(5000) + 30_000
-  with_nats_server_on_port(port, callback)
+  with_nats_server_on_port(port, fn() { callback(port) })
 }
 
 pub fn await_connected(subject: process.Subject(nats.Message), attempts: Int) {

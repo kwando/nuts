@@ -2,21 +2,33 @@ import gleam/bit_array
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/int
+import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
+import gleam/otp/supervision
 import gleam/result
+import gleam/string
 import mug
 import nuts/connect_options.{ConnectOptions}
 import nuts/internal/command
 import nuts/internal/protocol.{type ServerInfo}
 
 pub opaque type Options {
-  Options(host: String, port: Int)
+  Options(
+    host: String,
+    port: Int,
+    nkey_seed: Option(String),
+    reconnect_interval: Int,
+  )
 }
 
 pub fn new(host, port) {
-  Options(host:, port:)
+  Options(host:, port:, nkey_seed: None, reconnect_interval: 1000)
+}
+
+pub fn nkey_seed(options: Options, string: String) -> Options {
+  Options(..options, nkey_seed: Some(string))
 }
 
 pub type NatsMessage {
@@ -29,10 +41,11 @@ pub type NatsMessage {
 }
 
 pub type NatsError {
-  NatsError
   NotConnected
   NetworkError(mug.Error)
   ProtocolError(String)
+  AuthenticationFailed
+  GenericError(String)
 }
 
 pub opaque type Message {
@@ -128,6 +141,7 @@ type ClientState {
     server_info: Option(ServerInfo),
     subscribers: SubscriberMap,
     next_sid: Int,
+    self: Subject(Message),
   )
 }
 
@@ -142,6 +156,7 @@ pub fn start(process_name: process.Name(Message), options: Options) {
       server_info: None,
       subscribers: new_subscriber_map(),
       next_sid: 1,
+      self:,
     ))
     |> actor.selecting(
       process.new_selector()
@@ -154,6 +169,13 @@ pub fn start(process_name: process.Name(Message), options: Options) {
   |> actor.named(process_name)
   |> actor.on_message(handle_message)
   |> actor.start
+}
+
+pub fn supervised(
+  name: process.Name(Message),
+  options: Options,
+) -> supervision.ChildSpecification(Nil) {
+  supervision.worker(fn() { start(name, options) })
 }
 
 fn handle_message(
@@ -187,7 +209,9 @@ fn handle_message(
             }
             Error(error) -> {
               actor.send(reply, Error(error))
-              actor.continue(state)
+              state
+              |> close_connection()
+              |> actor.continue()
             }
           }
         }
@@ -201,17 +225,22 @@ fn handle_message(
       case mug_message {
         mug.Packet(socket, data) -> {
           mug.receive_next_packet_as_message(socket)
-          data
           let buffer = bit_array.append(state.buffer, data)
           case parse_server_messages(state, buffer) {
             Ok(state) -> actor.continue(state)
-            Error(_err) -> todo
+            Error(err) -> {
+              io.println_error("error: " <> string.inspect(err))
+
+              state
+              |> close_connection
+              |> actor.continue
+            }
           }
         }
-        mug.SocketClosed(_) ->
-          ClientState(..state, socket: None)
+        mug.SocketClosed(_) | mug.TcpError(_, _) ->
+          state
+          |> close_connection
           |> actor.continue
-        mug.TcpError(_, _) -> todo
       }
     Subscribe(subject:, subscriber:, reply:) -> {
       let sid = state.next_sid |> int.to_base36
@@ -243,7 +272,11 @@ fn handle_message(
             }
           }
         }
-        Error(_) -> todo
+        // the process is is already dead, so no idea to setup a subscription
+        Error(Nil) -> {
+          actor.send(reply, Error(GenericError("subscriber is down")))
+          actor.continue(state)
+        }
       }
     }
     SubscriberDown(down) -> {
@@ -271,7 +304,13 @@ fn handle_message(
                 |> update_subscribers(remove_subscriber(_, subscriber)),
               )
             }
-            Error(_) -> todo
+            Error(_) -> {
+              actor.send(reply, Ok(Nil))
+              actor.continue(
+                state
+                |> update_subscribers(remove_subscriber(_, subscriber)),
+              )
+            }
           }
         }
         Error(_) -> {
@@ -285,6 +324,23 @@ fn handle_message(
       actor.stop()
     }
   }
+}
+
+fn close_connection(state: ClientState) {
+  case state.socket {
+    Some(socket) -> {
+      let _ = mug.shutdown(socket)
+
+      ClientState(..state, socket: None, server_info: None)
+      |> schedule_reconnect()
+    }
+    None -> state
+  }
+}
+
+fn schedule_reconnect(state: ClientState) {
+  process.send_after(state.self, state.options.reconnect_interval, Connect)
+  state
 }
 
 fn parse_server_messages(state, buffer) -> Result(ClientState, NatsError) {
@@ -304,7 +360,6 @@ fn parse_server_messages(state, buffer) -> Result(ClientState, NatsError) {
 fn send_bits(state: ClientState, bits: BitArray) {
   case state.socket {
     Some(socket) -> {
-      bits
       mug.send(socket, bits)
       |> result.map_error(NetworkError)
     }
@@ -318,29 +373,42 @@ fn handle_server_message(
 ) -> Result(ClientState, NatsError) {
   case message {
     protocol.Info(server_info) -> {
-      case
-        send_bits(
-          state,
-          command.connect(ConnectOptions(
-            verbose: False,
-            pedantic: True,
-            tls_required: False,
-            lang: "gleam",
-            version: "0.0.1",
-            headers: True,
-            echo_: True,
-            protocol: 0,
-            auth: connect_options.NoAuth,
-            name: "nuts",
-            no_responders: True,
-          )),
-        )
-      {
-        Ok(_) -> {
-          ClientState(..state, server_info: Some(server_info))
-          |> resubscribe
+      let auth = case state.options.nkey_seed, server_info.nonce {
+        Some(nkey), Some(nonce) -> connect_options.nkey_auth(nkey, nonce)
+        _, _ -> Ok(connect_options.NoAuth)
+      }
+
+      case auth {
+        Ok(auth) -> {
+          case
+            send_bits(
+              state,
+              command.connect(ConnectOptions(
+                verbose: False,
+                pedantic: True,
+                tls_required: False,
+                lang: "gleam",
+                version: "0.0.1",
+                headers: True,
+                echo_: True,
+                protocol: 0,
+                auth:,
+                name: "nuts",
+                no_responders: True,
+              )),
+            )
+          {
+            Ok(_) -> {
+              ClientState(..state, server_info: Some(server_info))
+              |> resubscribe
+            }
+            Error(err) -> Error(err)
+          }
         }
-        Error(err) -> Error(err)
+        Error(err) -> {
+          io.println_error(string.inspect(err))
+          Error(AuthenticationFailed)
+        }
       }
     }
     protocol.Ping -> {
@@ -350,15 +418,14 @@ fn handle_server_message(
       }
     }
     protocol.Pong -> Ok(state)
-    protocol.Msg(topic:, sid:, reply_to:, payload:) as msg -> {
-      msg
+    protocol.Msg(topic:, sid:, reply_to:, payload:) -> {
       broadcast_message(
         state,
         sid,
         NatsMessage(subject: topic, reply_to:, headers: [], payload:),
       )
     }
-    protocol.Hmsg(topic:, headers:, sid:, reply_to:, payload:) as msg -> {
+    protocol.Hmsg(topic:, headers:, sid:, reply_to:, payload:) -> {
       broadcast_message(
         state,
         sid,
@@ -400,7 +467,12 @@ fn broadcast_message(state: ClientState, sid: String, nats_message: NatsMessage)
       Ok(state)
     }
 
-    Error(_) -> todo as "unsubscribe "
+    Error(Nil) -> {
+      io.println_error(
+        "warning: message received but but no subscription found",
+      )
+      Ok(state)
+    }
   }
 }
 
@@ -414,7 +486,10 @@ fn setup_connection(state: ClientState) {
       mug.receive_next_packet_as_message(socket)
       ClientState(..state, socket: Some(socket))
     }
-    Error(_) -> ClientState(..state, socket: None)
+    Error(_) -> {
+      ClientState(..state, socket: None)
+      |> schedule_reconnect
+    }
   }
 }
 

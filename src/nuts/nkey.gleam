@@ -37,7 +37,10 @@ pub fn from_seed(seed: String) -> Result(KeyPair, NkeyError) {
     when: !string.starts_with(seed, "SU"),
     return: Error(KeyTypeError),
   )
-  let assert Ok(bin) = decode32(bit_array.from_string(seed))
+  use bin <- result.try(
+    decode32(bit_array.from_string(seed))
+    |> result.replace_error(NkeyError("failed to decode32 of nkey")),
+  )
   use <- bool.guard(
     when: bit_array.byte_size(bin) < 32,
     return: Error(NkeyError("key is too shoort")),
@@ -68,10 +71,6 @@ pub fn from_seed(seed: String) -> Result(KeyPair, NkeyError) {
   }
 }
 
-//public(#nkey{type = Type, key = {Public, _Private}}) ->
-//    WithPrefix = <<Type:5, 0:3, Public/binary>>,
-//    CRC = crc(WithPrefix),
-//    encode_base32(<<WithPrefix/binary, CRC:16/little>>).
 pub fn public(pair: KeyPair) {
   let prefixed = <<pair.kind:5, 0:3, pair.public:bits>>
   let checksum = crc(prefixed)
