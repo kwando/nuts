@@ -9,6 +9,7 @@ import gleam/otp/actor
 import gleam/otp/supervision
 import gleam/result
 import gleam/string
+import gleam/uri
 import mug
 import nuts/connect_options.{ConnectOptions}
 import nuts/internal/command
@@ -59,6 +60,7 @@ pub type NatsError {
   ProtocolError(String)
   AuthenticationFailed
   GenericError(String)
+  BadURL
 }
 
 pub opaque type Message {
@@ -193,6 +195,18 @@ pub fn supervised(
   options: Options,
 ) -> supervision.ChildSpecification(Nil) {
   supervision.worker(fn() { start(name, options) })
+}
+
+pub fn from_url(url: String) {
+  case uri.parse(url) {
+    Ok(uri) ->
+      new(
+        uri.host |> option.unwrap("127.0.0.1"),
+        uri.port |> option.unwrap(4222),
+      )
+      |> Ok
+    Error(_) -> Error(BadURL)
+  }
 }
 
 fn handle_message(
@@ -491,7 +505,11 @@ fn resubscribe(state: ClientState) -> Result(ClientState, NatsError) {
   }
 }
 
-fn broadcast_message(state: ClientState, sid: String, nats_message: NatsMessage) {
+fn broadcast_message(
+  state: ClientState,
+  sid: String,
+  nats_message: NatsMessage,
+) {
   case get_subscriber_by_sid(state.subscribers, sid) {
     Ok(subscriber) -> {
       actor.send(subscriber.subject, nats_message)
