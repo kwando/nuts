@@ -193,8 +193,20 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
         }
       }
     }
-    <<>> -> NeedsMoreData
-    msg -> ProtocolError("unhandled protocol message: " <> string.inspect(msg))
+    data -> {
+      case has_clrf(data) {
+        True -> ProtocolError("invalid command")
+        False -> NeedsMoreData
+      }
+    }
+  }
+}
+
+fn has_clrf(buffer: BitArray) {
+  case buffer {
+    <<"\r\n", _:bits>> -> True
+    <<_, rest:bits>> -> has_clrf(rest)
+    _ -> False
   }
 }
 
@@ -209,20 +221,19 @@ fn with_int(
 }
 
 fn parse_headers(headers: BitArray) {
-  case headers {
-    <<"NATS/1.0\r\n", data:bits>> -> {
-      let assert Ok(data) = bit_array.to_string(data)
-
-      data
-      |> string.trim
-      |> string.split("\r\n")
-      |> list.try_map(fn(line) {
-        case string.split_once(line, ":") {
-          Error(_) -> Error(Nil)
-          Ok(#(key, value)) -> Ok(#(key, string.trim(value)))
+  case bit_array.to_string(headers) {
+    Ok(headers) ->
+      case string.split(headers |> string.trim_end, "\r\n") {
+        ["NATS/1.0" <> _, ..rest] -> {
+          list.try_map(rest, fn(line) {
+            case string.split_once(line, ":") {
+              Error(_) -> Error(Nil)
+              Ok(#(key, value)) -> Ok(#(key, string.trim(value)))
+            }
+          })
         }
-      })
-    }
+        _ -> Error(Nil)
+      }
     _ -> Error(Nil)
   }
 }

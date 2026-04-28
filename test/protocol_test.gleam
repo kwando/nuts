@@ -1,5 +1,6 @@
 import gleam/option.{None, Some}
 import gleeunit/should
+import nuts
 import nuts/internal/protocol.{Continue, NeedsMoreData}
 
 pub fn parse_test() {
@@ -74,4 +75,35 @@ pub fn parse_message_with_headers_test() {
       <<>>,
     ),
   )
+}
+
+pub fn parse_timeout_test() {
+  let buffer = <<
+    "HMSG my_inbox 2 81 81\r\nNATS/1.0 408 Request Timeout\r\nNats-Pending-Messages: 1\r\nNats-Pending-Bytes: 0\r\n\r\n\r\n",
+  >>
+  assert protocol.parse(buffer)
+    == Continue(
+      protocol.Hmsg(
+        "my_inbox",
+        [#("Nats-Pending-Messages", "1"), #("Nats-Pending-Bytes", "0")],
+        "2",
+        None,
+        <<>>,
+      ),
+      <<>>,
+    )
+}
+
+pub fn parse_partial_command_test() {
+  let buffer = <<
+    "M",
+  >>
+  assert protocol.parse(buffer) == NeedsMoreData
+}
+
+pub fn parse_invalid_command_test() {
+  let buffer = <<
+    "FOO 39\r\n",
+  >>
+  assert protocol.parse(buffer) == protocol.ProtocolError("invalid command")
 }

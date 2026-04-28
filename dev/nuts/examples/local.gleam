@@ -1,5 +1,7 @@
+import gleam/bit_array
 import gleam/erlang/process
 import gleam/io
+import gleam/result
 import gleam/string
 import gleam_community/ansi
 import nuts
@@ -19,7 +21,14 @@ fn loop(subject: process.Subject(nuts.NatsMessage)) {
     Error(_) -> loop(subject)
     Ok(event) -> {
       io.println(
-        ansi.green(event.subject) <> " " <> event.payload |> string.inspect,
+        ansi.green(event.subject)
+        <> " "
+        <> event.payload
+        |> bit_array.to_string
+        |> result.lazy_unwrap(fn() {
+          string.inspect(event.reply_to)
+          |> ansi.yellow
+        }),
       )
       loop(subject)
     }
