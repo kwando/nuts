@@ -84,7 +84,7 @@ pub opaque type Message {
     timeout: Int,
     reply: Subject(Result(NatsMessage, NatsError)),
   )
-  RequestTimeout(token: String)
+  RequestTimeout(inbox: String)
 }
 
 type Subscriber {
@@ -374,7 +374,6 @@ fn handle_message(
       actor.stop()
     }
     Request(subject:, headers:, payload:, reply:, timeout:) -> {
-      let token = state.next_sid |> int.to_string
       let inbox =
         inbox.new_inbox(state.inbox_prefix, state.next_sid |> int.to_string)
 
@@ -387,7 +386,7 @@ fn handle_message(
 
           case send_bits(state, bytes) {
             Ok(_) -> {
-              process.send_after(state.self, timeout, RequestTimeout(token))
+              process.send_after(state.self, timeout, RequestTimeout(inbox))
 
               state
               |> register_request(inbox, reply)
@@ -408,13 +407,13 @@ fn handle_message(
         }
       }
     }
-    RequestTimeout(token:) -> {
-      case dict.get(state.request_map, token) {
+    RequestTimeout(inbox:) -> {
+      case dict.get(state.request_map, inbox) {
         Ok(subject) -> {
           process.send(subject, Error(GenericError("request timeout")))
           ClientState(
             ..state,
-            request_map: dict.delete(state.request_map, token),
+            request_map: dict.delete(state.request_map, inbox),
           )
         }
         Error(_) -> state
