@@ -85,7 +85,7 @@ pub fn parse_timeout_test() {
       protocol.Hmsg(
         "my_inbox",
         [
-          #("Nats-Status", "408"),
+          #("Nats-Status", "408 Request Timeout"),
           #("Nats-Pending-Messages", "1"),
           #("Nats-Pending-Bytes", "0"),
         ],

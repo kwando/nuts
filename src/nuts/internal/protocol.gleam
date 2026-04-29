@@ -262,13 +262,10 @@ fn parse_headers(headers: BitArray) {
     Ok(headers) ->
       case string.split(headers |> string.trim_end, "\r\n") {
         ["NATS/1.0" <> status, ..rest] -> {
-          let status = case
-            status
-            |> string.trim_start
-            |> string.split_once(" ")
-          {
-            Ok(#(status, _)) -> [#("Nats-Status", status)]
-            Error(_) -> []
+          let status = string.trim_start(status)
+          let status_entry = case status {
+            "" -> []
+            _ -> [#("Nats-Status", status)]
           }
 
           case
@@ -279,7 +276,7 @@ fn parse_headers(headers: BitArray) {
               }
             })
           {
-            Ok(headers) -> list.append(status, headers) |> Ok
+            Ok(headers) -> list.append(status_entry, headers) |> Ok
             Error(_) -> Error(Nil)
           }
         }
