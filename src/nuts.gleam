@@ -375,7 +375,7 @@ fn handle_message(
     }
     Request(subject:, headers:, payload:, reply:, timeout:) -> {
       let inbox =
-        inbox.new_inbox(state.inbox_prefix, state.next_sid |> int.to_string)
+        inbox.new_inbox(state.inbox_prefix, state.next_sid |> int.to_base36)
 
       case state.socket {
         Some(_) -> {
