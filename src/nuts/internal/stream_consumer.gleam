@@ -38,13 +38,7 @@ pub fn start(
         let subject = nuts.get_subject(subscription)
 
         let poll_ref = reference.new()
-        let _ = new_poll(ctx)
-
-        process.send_after(
-          self,
-          ctx.poll_expire |> duration.to_milliseconds,
-          PollExpired(poll_ref),
-        )
+        process.send(self, PollExpired(poll_ref))
 
         actor.initialised(State(
           ctx:,
@@ -74,20 +68,10 @@ fn handle_message(state: State, msg: Msg) {
         when: poll_ref != state.poll_ref,
         return: actor.continue(state),
       )
-      let new_poll_ref = reference.new()
-      let assert Ok(_) = new_poll(state.ctx)
-      process.send_after(
-        state.self,
-        state.ctx.poll_expire |> duration.to_milliseconds,
-        PollExpired(new_poll_ref),
-      )
-      actor.continue(
-        State(
-          ..state,
-          poll_ref: new_poll_ref,
-          pending_messages: state.ctx.batch_size,
-        ),
-      )
+
+      state
+      |> make_poll_request()
+      |> actor.continue
     }
     NatsMsg(msg) -> {
       case state.ctx.inbox_name == msg.subject {
@@ -105,20 +89,7 @@ fn handle_message(state: State, msg: Msg) {
           case ack_message(state.ctx, msg) {
             Ok(_) -> {
               case state.pending_messages {
-                1 -> {
-                  let new_poll_ref = reference.new()
-                  let assert Ok(_) = new_poll(state.ctx)
-                  process.send_after(
-                    state.self,
-                    state.ctx.poll_expire |> duration.to_milliseconds,
-                    PollExpired(new_poll_ref),
-                  )
-                  State(
-                    ..state,
-                    poll_ref: new_poll_ref,
-                    pending_messages: state.ctx.batch_size,
-                  )
-                }
+                1 -> make_poll_request(state)
                 _ ->
                   State(..state, pending_messages: state.pending_messages - 1)
               }
@@ -131,6 +102,30 @@ fn handle_message(state: State, msg: Msg) {
         }
       }
       |> actor.continue()
+    }
+  }
+}
+
+fn make_poll_request(state: State) {
+  let new_poll_ref = reference.new()
+
+  case new_poll(state.ctx) {
+    Ok(_) -> {
+      process.send_after(
+        state.self,
+        state.ctx.poll_expire |> duration.to_milliseconds,
+        PollExpired(new_poll_ref),
+      )
+      State(
+        ..state,
+        poll_ref: new_poll_ref,
+        pending_messages: state.ctx.batch_size,
+      )
+    }
+    Error(_err) -> {
+      // sending a poll failed, retry in 1s
+      process.send_after(state.self, 1000, PollExpired(new_poll_ref))
+      State(..state, poll_ref: new_poll_ref)
     }
   }
 }

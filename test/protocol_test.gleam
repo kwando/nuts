@@ -1,6 +1,5 @@
 import gleam/option.{None, Some}
 import gleeunit/should
-import nuts
 import nuts/internal/protocol.{Continue, NeedsMoreData}
 
 pub fn parse_test() {
@@ -85,7 +84,11 @@ pub fn parse_timeout_test() {
     == Continue(
       protocol.Hmsg(
         "my_inbox",
-        [#("Nats-Pending-Messages", "1"), #("Nats-Pending-Bytes", "0")],
+        [
+          #("Nats-Status", "408"),
+          #("Nats-Pending-Messages", "1"),
+          #("Nats-Pending-Bytes", "0"),
+        ],
         "2",
         None,
         <<>>,
@@ -106,4 +109,10 @@ pub fn parse_invalid_command_test() {
     "FOO 39\r\n",
   >>
   assert protocol.parse(buffer) == protocol.ProtocolError("invalid command")
+}
+
+pub fn parse_err_test() {
+  assert protocol.parse(<<"-ERR\r\n">>) == Continue(protocol.ERR(""), <<>>)
+  assert protocol.parse(<<"-ERR this is an error\r\n">>)
+    == Continue(protocol.ERR("this is an error"), <<>>)
 }
