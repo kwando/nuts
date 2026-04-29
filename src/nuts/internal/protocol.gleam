@@ -296,7 +296,7 @@ fn read_line_loop(buffer: BitArray, msg: BitArray) {
     <<"\r\n", rest:bits>> -> Ok(#(msg, rest))
     <<x, rest:bits>> -> read_line_loop(rest, <<msg:bits, x>>)
     <<>> -> Error(Nil)
-    _ -> panic as "unaligned bytes detected"
+    _ -> Error(Nil)
   }
 }
 
