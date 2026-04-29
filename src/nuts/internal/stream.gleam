@@ -75,6 +75,10 @@ pub type StreamPurgeResult {
   StreamPurgeResult(success: Bool, purged: Int)
 }
 
+pub type PubAck {
+  PubAck(stream: String, seq: Int, domain: Option(String), duplicate: Bool)
+}
+
 pub type JsonApiError {
   JsonApiError(code: Int, err_code: Int, description: String)
 }
@@ -309,6 +313,18 @@ pub fn stream_purge_decoder() -> decode.Decoder(StreamPurgeResult) {
   use success <- decode.field("success", decode.bool)
   use purged <- decode.field("purged", decode.int)
   decode.success(StreamPurgeResult(success:, purged:))
+}
+
+pub fn pub_ack_decoder() -> decode.Decoder(PubAck) {
+  use stream <- decode.field("stream", decode.string)
+  use seq <- decode.field("seq", decode.int)
+  use domain <- decode.optional_field(
+    "domain",
+    None,
+    decode.optional(decode.string),
+  )
+  use duplicate <- decode.optional_field("duplicate", False, decode.bool)
+  decode.success(PubAck(stream:, seq:, domain:, duplicate:))
 }
 
 // ----------------------------------------- Helpers -----------------------------------------

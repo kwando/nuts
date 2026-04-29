@@ -78,3 +78,20 @@ pub fn purge_stream(
     stream.stream_purge_decoder(),
   )
 }
+
+pub fn publish(
+  conn: Subject(nuts.Message),
+  subject subject: String,
+  headers headers: List(#(String, String)),
+  payload payload: BitArray,
+  timeout timeout: Int,
+) -> Result(stream.PubAck, nuts.NatsError) {
+  use response <- result.try(nuts.request(
+    conn,
+    subject,
+    headers,
+    payload,
+    timeout,
+  ))
+  stream.decode_jetstream_response(response.payload, stream.pub_ack_decoder())
+}
