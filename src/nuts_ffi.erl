@@ -1,6 +1,6 @@
 -module(nuts_ffi).
 
--export([decode32/1, encode32/1, generate_key/1, sign/2]).
+-export([decode32/1, encode32/1, generate_key/1, sign/2, match_crlf/1]).
 
 decode32(Bin) ->
     try
@@ -37,3 +37,9 @@ generate_key(PrivKeyIn) ->
 
 sign(PrivateKey, Data) ->
     crypto:sign(eddsa, none, Data, [PrivateKey, ed25519]).
+
+match_crlf(Binary) ->
+    case binary:match(Binary, <<"\r\n">>) of
+        {Pos, 2} -> {ok, Pos};
+        nomatch -> {error, nil}
+    end.

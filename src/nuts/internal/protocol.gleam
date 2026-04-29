@@ -187,15 +187,9 @@ fn convert_to_string(
 }
 
 fn has_crlf(buffer: BitArray) {
-  has_crlf_loop(buffer, 0)
-}
-
-fn has_crlf_loop(buffer: BitArray, scanned: Int) {
-  case buffer {
-    <<"\r\n", _:bits>> -> True
-    <<_, rest:bits>> if scanned < max_line_length ->
-      has_crlf_loop(rest, scanned + 1)
-    _ -> False
+  case find_crlf(buffer) {
+    Ok(_) -> True
+    Error(Nil) -> bit_array.byte_size(buffer) >= max_line_length
   }
 }
 
@@ -261,24 +255,18 @@ fn parse_headers(headers: BitArray) {
   }
 }
 
+@external(erlang, "nuts_ffi", "match_crlf")
+fn find_crlf(buffer: BitArray) -> Result(Int, Nil)
+
 /// Reads all bytes until it finds a CRLF
 fn read_line(buffer: BitArray) -> Result(#(BitArray, BitArray), Nil) {
-  case find_crlf_position(buffer, 0) {
+  case find_crlf(buffer) {
     Ok(pos) ->
       case buffer {
         <<line:size(pos)-bytes, "\r\n", rest:bits>> -> Ok(#(line, rest))
         _ -> Error(Nil)
       }
     Error(Nil) -> Error(Nil)
-  }
-}
-
-fn find_crlf_position(buffer: BitArray, pos: Int) -> Result(Int, Nil) {
-  case buffer {
-    <<"\r\n", _:bits>> -> Ok(pos)
-    <<_, rest:bits>> -> find_crlf_position(rest, pos + 1)
-    <<>> -> Error(Nil)
-    _ -> Error(Nil)
   }
 }
 
