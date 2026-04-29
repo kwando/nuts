@@ -117,3 +117,100 @@ pub fn parse_err_test() {
   assert protocol.parse(<<"-ERR this is an error\r\n">>)
     == Continue(protocol.ERR("this is an error"), <<>>)
 }
+
+pub fn parse_pong_test() {
+  protocol.parse(<<"PONG\r\n">>)
+  |> should.equal(Continue(protocol.Pong, <<>>))
+}
+
+pub fn parse_ok_test() {
+  protocol.parse(<<"+OK\r\n">>)
+  |> should.equal(Continue(protocol.OK, <<>>))
+}
+
+pub fn parse_info_test() {
+  let info_json =
+    "{\"server_id\":\"sid1\",\"server_name\":\"nats-1\",\"version\":\"2.10.0\",\"go\":\"1.21.0\",\"host\":\"127.0.0.1\",\"port\":4222,\"headers\":true,\"max_payload\":1048576,\"proto\":1}"
+  let assert Continue(protocol.Info(info), <<>>) =
+    protocol.parse(<<"INFO ", info_json:utf8, "\r\n">>)
+
+  info.server_id |> should.equal("sid1")
+  info.host |> should.equal("127.0.0.1")
+  info.port |> should.equal(4222)
+  info.headers |> should.equal(True)
+  info.max_payload |> should.equal(1_048_576)
+  info.client_id |> should.equal(None)
+  info.auth_required |> should.equal(None)
+  info.nonce |> should.equal(None)
+  info.jetstream |> should.equal(None)
+}
+
+pub fn parse_info_with_optional_fields_test() {
+  let info_json =
+    "{\"server_id\":\"sid2\",\"server_name\":\"nats-2\",\"version\":\"2.11.0\",\"go\":\"1.22.0\",\"host\":\"0.0.0.0\",\"port\":4222,\"headers\":false,\"max_payload\":2097152,\"proto\":1,\"client_id\":42,\"auth_required\":true,\"tls_required\":true,\"nonce\":\"abc123\",\"jetstream\":true,\"cluster\":\"test-cluster\",\"domain\":\"default\"}"
+  let assert Continue(protocol.Info(info), <<>>) =
+    protocol.parse(<<"INFO ", info_json:utf8, "\r\n">>)
+
+  info.client_id |> should.equal(Some(42))
+  info.auth_required |> should.equal(Some(True))
+  info.tls_required |> should.equal(Some(True))
+  info.jetstream |> should.equal(Some(True))
+  info.cluster |> should.equal(Some("test-cluster"))
+  info.domain |> should.equal(Some("default"))
+}
+
+pub fn parse_info_bad_json_test() {
+  protocol.parse(<<"INFO {bad json}\r\n">>)
+  |> should.equal(protocol.ProtocolError("failed to decode server info"))
+}
+
+pub fn parse_info_partial_test() {
+  protocol.parse(<<"INFO ">>) |> should.equal(NeedsMoreData)
+}
+
+pub fn parse_info_with_remaining_data_test() {
+  let info_json =
+    "{\"server_id\":\"sid3\",\"server_name\":\"nats-3\",\"version\":\"2.10.0\",\"go\":\"1.21.0\",\"host\":\"localhost\",\"port\":4222,\"headers\":true,\"max_payload\":1048576,\"proto\":1}"
+  let assert Continue(protocol.Info(info), rest) =
+    protocol.parse(<<"INFO ", info_json:utf8, "\r\nPING\r\n">>)
+
+  info.server_id |> should.equal("sid3")
+  let assert Continue(protocol.Ping, <<>>) = protocol.parse(rest)
+}
+
+pub fn parse_binary_payload_test() {
+  let assert Continue(
+    protocol.Msg("test", "1", None, <<0xFF, 0xFE, 0x01>>),
+    <<>>,
+  ) = protocol.parse(<<"MSG test 1 3\r\n", 0xFF, 0xFE, 0x01, "\r\n">>)
+}
+
+pub fn parse_over_max_payload_test() {
+  protocol.parse(<<"MSG test 1 1048577\r\n">>)
+  |> should.equal(protocol.ProtocolError("payload over max_payload"))
+}
+
+pub fn parse_hmsg_status_only_test() {
+  protocol.parse(<<
+    "HMSG test 1 16 17\r\nNATS/1.0 408\r\n\r\nX\r\n",
+  >>)
+  |> should.equal(
+    Continue(
+      protocol.Hmsg(
+        topic: "test",
+        headers: [#("Nats-Status", "408")],
+        sid: "1",
+        reply_to: None,
+        payload: <<"X">>,
+      ),
+      <<>>,
+    ),
+  )
+}
+
+pub fn parse_hmsg_malformed_headers_test() {
+  protocol.parse(<<
+    "HMSG test 1 23 25\r\nNATS/1.0\r\nBadHeader\r\n\r\nhi\r\n",
+  >>)
+  |> should.equal(protocol.ProtocolError("malformed headers"))
+}
