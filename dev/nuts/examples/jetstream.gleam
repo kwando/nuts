@@ -18,21 +18,19 @@ pub fn cyan_logger(msg) {
 }
 
 pub fn main() {
-  io.println("hello world")
-
   let nuts_name = process.new_name("nuts")
 
   let assert Ok(_) =
     nuts.new("100.121.244.19", 4222)
-    //|> nuts.with_logger(nuts.Logger(
-    //  info: cyan_logger,
-    //  debug: cyan_logger,
-    //  warning: cyan_logger,
-    //))
+    |> nuts.with_logger(nuts.Logger(
+      info: cyan_logger,
+      debug: cyan_logger,
+      warning: cyan_logger,
+    ))
     |> nuts.start(nuts_name, _)
 
   let subject = process.named_subject(nuts_name)
-  let stream_name = "nmea"
+  let stream_name = "victron"
   let inbox_name = "my_inbox_" <> int.random(1_000_000_000) |> int.to_string
   let consumer_name = "nuts_example"
   let batch_size = 100
@@ -48,16 +46,26 @@ pub fn main() {
   |> json.to_string
   |> io.println
 
-  let _ =
-    nuts.new_message(
-      jetstream.create_consumer_topic(stream_name, consumer_name),
-      create_consumer_json
-        |> json.to_string
-        |> bit_array.from_string,
-    )
-    |> nuts.reply_to(option.Some(inbox_name))
-    |> nuts.publish(subject, _)
-    |> echo
+  process.sleep(1000)
+  nuts.request(
+    subject,
+    subject: jetstream.create_consumer_topic(stream_name, consumer_name),
+    headers: [],
+    payload: create_consumer_json |> json.to_string |> bit_array.from_string,
+    timeout: 1000,
+  )
+  |> echo
+
+  //  let _ =
+  //    nuts.new_message(
+  //      jetstream.create_consumer_topic(stream_name, consumer_name),
+  //      create_consumer_json
+  //        |> json.to_string
+  //        |> bit_array.from_string,
+  //    )
+  //    |> nuts.reply_to(option.Some(inbox_name))
+  //    |> nuts.publish(subject, _)
+  //    |> echo
 
   let _ =
     stream_consumer.start(
@@ -67,7 +75,7 @@ pub fn main() {
         consumer_name:,
         nats_server: subject,
         batch_size:,
-        poll_expire: duration.seconds(3),
+        poll_expire: duration.seconds(2),
       ),
       fn(msg, info) {
         io.println(

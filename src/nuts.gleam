@@ -12,6 +12,7 @@ import gleam/string
 import gleam/uri
 import mug
 import nuts/connect_options.{ConnectOptions}
+import nuts/inbox
 import nuts/internal/command
 import nuts/internal/protocol.{type ParserConfig, type ServerInfo, ParserConfig}
 
@@ -76,6 +77,14 @@ pub opaque type Message {
   SubscriberDown(process.Down)
   Unsubscribe(Subscription, Subject(Result(Nil, NatsError)))
   Shutdown(Subject(Nil))
+  Request(
+    subject: String,
+    headers: List(#(String, String)),
+    payload: BitArray,
+    timeout: Int,
+    reply: Subject(Result(NatsMessage, NatsError)),
+  )
+  RequestTimeout(token: String)
 }
 
 type Subscriber {
@@ -160,6 +169,8 @@ type ClientState {
     self: Subject(Message),
     logger: Logger,
     connection_attempt: Int,
+    request_map: Dict(String, Subject(Result(NatsMessage, NatsError))),
+    inbox_prefix: String,
   )
 }
 
@@ -178,6 +189,8 @@ pub fn start(process_name: process.Name(Message), options: Options) {
       self:,
       logger: options.logger,
       connection_attempt: 1,
+      request_map: dict.new(),
+      inbox_prefix: inbox.generate_prefix(),
     ))
     |> actor.selecting(
       process.new_selector()
@@ -360,7 +373,71 @@ fn handle_message(
       actor.send(reply, Nil)
       actor.stop()
     }
+    Request(subject:, headers:, payload:, reply:, timeout:) -> {
+      let token = state.next_sid |> int.to_string
+      let inbox =
+        inbox.new_inbox(state.inbox_prefix, state.next_sid |> int.to_string)
+
+      case state.socket {
+        Some(_) -> {
+          let bytes = case headers {
+            [] -> command.pub_(subject, Some(inbox), payload)
+            headers -> command.hpub(subject, Some(inbox), headers, payload)
+          }
+
+          case send_bits(state, bytes) {
+            Ok(_) -> {
+              process.send_after(state.self, timeout, RequestTimeout(token))
+
+              state
+              |> register_request(inbox, reply)
+              |> increment_sid
+              |> actor.continue
+            }
+            Error(error) -> {
+              actor.send(reply, Error(error))
+              state
+              |> close_connection()
+              |> actor.continue()
+            }
+          }
+        }
+        None -> {
+          actor.send(reply, Error(NotConnected))
+          actor.continue(state)
+        }
+      }
+    }
+    RequestTimeout(token:) -> {
+      case dict.get(state.request_map, token) {
+        Ok(subject) -> {
+          process.send(subject, Error(GenericError("request timeout")))
+          ClientState(
+            ..state,
+            request_map: dict.delete(state.request_map, token),
+          )
+        }
+        Error(_) -> state
+      }
+      |> actor.continue()
+    }
   }
+}
+
+fn increment_sid(client_state: ClientState) -> ClientState {
+  ClientState(..client_state, next_sid: client_state.next_sid + 1)
+}
+
+fn register_request(
+  client_state: ClientState,
+  token: String,
+  reply: Subject(Result(NatsMessage, NatsError)),
+) -> ClientState {
+  ClientState(
+    ..client_state,
+    request_map: client_state.request_map
+      |> dict.insert(token, reply),
+  )
 }
 
 fn close_connection(state: ClientState) {
@@ -498,16 +575,24 @@ fn resubscribe(state: ClientState) -> Result(ClientState, NatsError) {
   let subscribers = state.subscribers.sids |> dict.values
 
   let command =
-    list.fold(subscribers, <<>>, fn(acc, subscriber) {
-      bit_array.append(
-        acc,
-        command.sub(
-          subject: subscriber.pattern,
-          sid: subscriber.sid,
-          queue_group: None,
-        ),
-      )
-    })
+    list.fold(
+      subscribers,
+      command.sub(
+        state.inbox_prefix <> "*",
+        state.inbox_prefix,
+        queue_group: None,
+      ),
+      fn(acc, subscriber) {
+        bit_array.append(
+          acc,
+          command.sub(
+            subject: subscriber.pattern,
+            sid: subscriber.sid,
+            queue_group: None,
+          ),
+        )
+      },
+    )
 
   case command {
     <<>> -> Ok(state)
@@ -522,16 +607,38 @@ fn broadcast_message(
   sid: String,
   nats_message: NatsMessage,
 ) {
-  case get_subscriber_by_sid(state.subscribers, sid) {
-    Ok(subscriber) -> {
-      actor.send(subscriber.subject, nats_message)
-      Ok(state)
-    }
+  case string.starts_with(nats_message.subject, state.inbox_prefix) {
+    True -> {
+      case state.request_map |> dict.get(nats_message.subject) {
+        Ok(response_subject) -> {
+          process.send(response_subject, Ok(nats_message))
 
-    Error(Nil) -> {
-      state.logger.warning("message received but but no subscription found")
-      Ok(state)
+          ClientState(
+            ..state,
+            request_map: dict.delete(state.request_map, nats_message.subject),
+          )
+          |> Ok
+        }
+        Error(_) -> {
+          state.logger.warning(
+            "got message for inbox but no responder available",
+          )
+          Ok(state)
+        }
+      }
     }
+    False ->
+      case get_subscriber_by_sid(state.subscribers, sid) {
+        Ok(subscriber) -> {
+          actor.send(subscriber.subject, nats_message)
+          Ok(state)
+        }
+
+        Error(Nil) -> {
+          state.logger.warning("message received but but no subscription found")
+          Ok(state)
+        }
+      }
   }
 }
 
@@ -637,4 +744,20 @@ pub fn noop_logger() {
 pub fn default_logger(context: String) {
   let output = add_context(stderr_log, context)
   Logger(info: output, debug: output, warning: output)
+}
+
+pub fn request(
+  conn: Subject(Message),
+  subject subject: String,
+  headers headers: List(#(String, String)),
+  payload payload: BitArray,
+  timeout timeout: Int,
+) -> Result(NatsMessage, NatsError) {
+  actor.call(conn, timeout + 5000, Request(
+    subject,
+    headers,
+    payload,
+    timeout,
+    _,
+  ))
 }

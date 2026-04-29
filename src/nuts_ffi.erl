@@ -1,6 +1,6 @@
 -module(nuts_ffi).
 
--export([decode32/1, encode32/1, generate_key/1, sign/2, match_crlf/1]).
+-export([decode32/1, encode32/1, generate_key/1, sign/2, match_crlf/1, unique_integer/0]).
 
 decode32(Bin) ->
     try
@@ -43,3 +43,6 @@ match_crlf(Binary) ->
         {Pos, 2} -> {ok, Pos};
         nomatch -> {error, nil}
     end.
+
+unique_integer() ->
+    erlang:unique_integer([monotonic, positive]).
