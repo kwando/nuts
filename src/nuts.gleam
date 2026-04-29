@@ -594,12 +594,8 @@ fn resubscribe(state: ClientState) -> Result(ClientState, NatsError) {
       },
     )
 
-  case command {
-    <<>> -> Ok(state)
-    command ->
-      send_bits(state, command)
-      |> result.replace(state)
-  }
+  send_bits(state, command)
+  |> result.replace(state)
 }
 
 fn broadcast_message(
