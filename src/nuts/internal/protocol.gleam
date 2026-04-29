@@ -15,35 +15,6 @@ const max_line_length = 4096
 /// subtract header_line_end_size to get the actual header content length.
 const header_line_end_size = 2
 
-pub type ServerInfo {
-  ServerInfo(
-    server_id: String,
-    server_name: String,
-    version: String,
-    go: String,
-    host: String,
-    port: Int,
-    headers: Bool,
-    max_payload: Int,
-    proto: Int,
-    client_id: Option(Int),
-    auth_required: Option(Bool),
-    tls_required: Option(Bool),
-    tls_verify: Option(Bool),
-    tls_available: Option(Bool),
-    connect_urls: Option(List(String)),
-    ws_connect_urls: Option(List(String)),
-    ldm: Option(Bool),
-    git_commit: Option(String),
-    jetstream: Option(Bool),
-    ip: Option(String),
-    client_ip: Option(String),
-    nonce: Option(BitArray),
-    cluster: Option(String),
-    domain: Option(String),
-  )
-}
-
 pub type ServerMessage {
   Info(ServerInfo)
   Ping
@@ -292,6 +263,35 @@ fn read_body(buffer: BitArray, bytes_to_read: Int) {
         }
       }
   }
+}
+
+pub type ServerInfo {
+  ServerInfo(
+    server_id: String,
+    server_name: String,
+    version: String,
+    go: String,
+    host: String,
+    port: Int,
+    headers: Bool,
+    max_payload: Int,
+    proto: Int,
+    client_id: Option(Int),
+    auth_required: Option(Bool),
+    tls_required: Option(Bool),
+    tls_verify: Option(Bool),
+    tls_available: Option(Bool),
+    connect_urls: Option(List(String)),
+    ws_connect_urls: Option(List(String)),
+    ldm: Option(Bool),
+    git_commit: Option(String),
+    jetstream: Option(Bool),
+    ip: Option(String),
+    client_ip: Option(String),
+    nonce: Option(BitArray),
+    cluster: Option(String),
+    domain: Option(String),
+  )
 }
 
 fn server_info_decoder() -> decode.Decoder(ServerInfo) {
