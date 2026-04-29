@@ -6,9 +6,17 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 
-const max_payload = 1_048_576
+const default_max_payload = 1_048_576
 
 const max_line_length = 4096
+
+pub type ParserConfig {
+  ParserConfig(max_payload: Int)
+}
+
+pub fn default_parser_config() -> ParserConfig {
+  ParserConfig(max_payload: default_max_payload)
+}
 
 /// NATS protocol headers are terminated by \r\n (2 bytes). When reading
 /// HMSG bodies the reported header size includes this separator, so we
@@ -37,7 +45,10 @@ pub type ProtocolReadResult {
   NeedsMoreData
 }
 
-pub fn parse(buffer: BitArray) -> ProtocolReadResult {
+pub fn parse(
+  buffer: BitArray,
+  config config: ParserConfig,
+) -> ProtocolReadResult {
   case buffer {
     <<"INFO ", rest:bits>> -> {
       case read_line(rest) {
@@ -79,7 +90,7 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
           case parse_msg_fields(string.split(line, " ")) {
             Ok(#(topic, sid, reply_to, byte_size)) -> {
               use byte_size <- with_int(byte_size)
-              case read_body(rest, byte_size) {
+              case read_body(rest, byte_size, config.max_payload) {
                 BodyReadSuccess(payload, rest) ->
                   Continue(Msg(topic:, sid:, payload:, reply_to:), rest)
                 BodyReadFail -> ProtocolError("malformed body")
@@ -104,9 +115,21 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
               use header_bytes <- with_int(header_bytes)
               use total_bytes <- with_int(total_bytes)
 
-              case read_body(rest, header_bytes - header_line_end_size) {
+              case
+                read_body(
+                  rest,
+                  header_bytes - header_line_end_size,
+                  config.max_payload,
+                )
+              {
                 BodyReadSuccess(headers, rest) -> {
-                  case read_body(rest, total_bytes - header_bytes) {
+                  case
+                    read_body(
+                      rest,
+                      total_bytes - header_bytes,
+                      config.max_payload,
+                    )
+                  {
                     BodyReadSuccess(body, rest) -> {
                       case parse_headers(headers) {
                         Ok(headers) ->
@@ -248,7 +271,7 @@ type ReadBodyResult {
   OverMaxPayload
 }
 
-fn read_body(buffer: BitArray, bytes_to_read: Int) {
+fn read_body(buffer: BitArray, bytes_to_read: Int, max_payload: Int) {
   case bytes_to_read > max_payload {
     True -> OverMaxPayload
     False ->

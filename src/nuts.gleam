@@ -13,7 +13,7 @@ import gleam/uri
 import mug
 import nuts/connect_options.{ConnectOptions}
 import nuts/internal/command
-import nuts/internal/protocol.{type ServerInfo}
+import nuts/internal/protocol.{type ParserConfig, type ServerInfo, ParserConfig}
 
 const actor_timeout = 5000
 
@@ -154,6 +154,7 @@ type ClientState {
     socket: Option(mug.Socket),
     buffer: BitArray,
     server_info: Option(ServerInfo),
+    parser_config: ParserConfig,
     subscribers: SubscriberMap,
     next_sid: Int,
     self: Subject(Message),
@@ -171,6 +172,7 @@ pub fn start(process_name: process.Name(Message), options: Options) {
       socket: None,
       buffer: <<>>,
       server_info: None,
+      parser_config: protocol.default_parser_config(),
       subscribers: new_subscriber_map(),
       next_sid: 1,
       self:,
@@ -371,6 +373,7 @@ fn close_connection(state: ClientState) {
         ..state,
         socket: None,
         server_info: None,
+        parser_config: protocol.default_parser_config(),
         connection_attempt: 1,
       )
       |> setup_connection
@@ -384,8 +387,11 @@ fn schedule_reconnect(state: ClientState) {
   state
 }
 
-fn parse_server_messages(state, buffer) -> Result(ClientState, NatsError) {
-  case protocol.parse(buffer) {
+fn parse_server_messages(
+  state: ClientState,
+  buffer: BitArray,
+) -> Result(ClientState, NatsError) {
+  case protocol.parse(buffer, config: state.parser_config) {
     protocol.Continue(message, remaining_bytes) -> {
       let state = ClientState(..state, buffer: remaining_bytes)
       case handle_server_message(state, message) {
@@ -444,7 +450,13 @@ fn handle_server_message(
             )
           {
             Ok(_) -> {
-              ClientState(..state, server_info: Some(server_info))
+              ClientState(
+                ..state,
+                server_info: Some(server_info),
+                parser_config: ParserConfig(
+                  max_payload: server_info.max_payload,
+                ),
+              )
               |> resubscribe
             }
             Error(err) -> Error(err)
