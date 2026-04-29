@@ -630,7 +630,7 @@ fn broadcast_message(
         }
 
         Error(Nil) -> {
-          state.logger.warning("message received but but no subscription found")
+          state.logger.warning("message received but no subscription found")
           Ok(state)
         }
       }
