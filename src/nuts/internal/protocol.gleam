@@ -105,33 +105,18 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
         Ok(#(line, rest)) -> {
           use line <- convert_to_string(line)
 
-          case string.split(line, " ") {
-            [topic, sid, byte_size] -> {
+          case parse_msg_fields(string.split(line, " ")) {
+            Ok(#(topic, sid, reply_to, byte_size)) -> {
               use byte_size <- with_int(byte_size)
               case read_body(rest, byte_size) {
-                BodyReadSuccess(payload, rest) -> {
-                  Continue(Msg(topic:, sid:, payload:, reply_to: None), rest)
-                }
+                BodyReadSuccess(payload, rest) ->
+                  Continue(Msg(topic:, sid:, payload:, reply_to:), rest)
                 BodyReadFail -> ProtocolError("malformed body")
                 BodyTooShort -> NeedsMoreData
                 OverMaxPayload -> ProtocolError("payload over max_payload")
               }
             }
-            [topic, sid, reply_to, byte_size] -> {
-              use byte_size <- with_int(byte_size)
-              case read_body(rest, byte_size) {
-                BodyReadSuccess(payload, rest) -> {
-                  Continue(
-                    Msg(topic:, sid:, payload:, reply_to: Some(reply_to)),
-                    rest,
-                  )
-                }
-                BodyReadFail -> ProtocolError("malformed body")
-                BodyTooShort -> NeedsMoreData
-                OverMaxPayload -> ProtocolError("payload over max_payload")
-              }
-            }
-            _ -> ProtocolError("bad message")
+            Error(_) -> ProtocolError("bad message")
           }
         }
         Error(..) -> NeedsMoreData
@@ -143,8 +128,8 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
         Ok(#(line, rest)) -> {
           use line <- convert_to_string(line)
 
-          case string.split(line, " ") {
-            [topic, sid, reply_to, header_bytes, total_bytes] -> {
+          case parse_hmsg_fields(string.split(line, " ")) {
+            Ok(#(topic, sid, reply_to, header_bytes, total_bytes)) -> {
               use header_bytes <- with_int(header_bytes)
               use total_bytes <- with_int(total_bytes)
 
@@ -160,7 +145,7 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
                               sid:,
                               headers:,
                               payload: body,
-                              reply_to: Some(reply_to),
+                              reply_to:,
                             ),
                             rest,
                           )
@@ -177,40 +162,7 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
                 OverMaxPayload -> ProtocolError("payload over max_payload")
               }
             }
-            [topic, sid, header_bytes, total_bytes] -> {
-              use header_bytes <- with_int(header_bytes)
-              use total_bytes <- with_int(total_bytes)
-
-              case read_body(rest, header_bytes - header_line_end_size) {
-                BodyReadSuccess(headers, rest) -> {
-                  case read_body(rest, total_bytes - header_bytes) {
-                    BodyReadSuccess(body, rest) -> {
-                      case parse_headers(headers) {
-                        Ok(headers) ->
-                          Continue(
-                            Hmsg(
-                              topic:,
-                              sid:,
-                              headers:,
-                              payload: body,
-                              reply_to: None,
-                            ),
-                            rest,
-                          )
-                        Error(_) -> ProtocolError("malformed headers")
-                      }
-                    }
-                    BodyReadFail -> ProtocolError("malformed body")
-                    BodyTooShort -> NeedsMoreData
-                    OverMaxPayload -> ProtocolError("payload over max_payload")
-                  }
-                }
-                BodyReadFail -> ProtocolError("failed to read headers")
-                BodyTooShort -> NeedsMoreData
-                OverMaxPayload -> ProtocolError("payload over max_payload")
-              }
-            }
-            x -> ProtocolError("invalid HMSG: " <> string.inspect(x))
+            Error(_) -> ProtocolError("invalid HMSG")
           }
         }
       }
@@ -257,6 +209,29 @@ fn with_int(
   }
 }
 
+fn parse_msg_fields(
+  fields: List(String),
+) -> Result(#(String, String, Option(String), String), Nil) {
+  case fields {
+    [topic, sid, byte_size] -> Ok(#(topic, sid, None, byte_size))
+    [topic, sid, reply_to, byte_size] ->
+      Ok(#(topic, sid, Some(reply_to), byte_size))
+    _ -> Error(Nil)
+  }
+}
+
+fn parse_hmsg_fields(
+  fields: List(String),
+) -> Result(#(String, String, Option(String), String, String), Nil) {
+  case fields {
+    [topic, sid, reply_to, header_bytes, total_bytes] ->
+      Ok(#(topic, sid, Some(reply_to), header_bytes, total_bytes))
+    [topic, sid, header_bytes, total_bytes] ->
+      Ok(#(topic, sid, None, header_bytes, total_bytes))
+    _ -> Error(Nil)
+  }
+}
+
 fn parse_headers(headers: BitArray) {
   case bit_array.to_string(headers) {
     Ok(headers) ->
@@ -288,13 +263,20 @@ fn parse_headers(headers: BitArray) {
 
 /// Reads all bytes until it finds a CRLF
 fn read_line(buffer: BitArray) -> Result(#(BitArray, BitArray), Nil) {
-  read_line_loop(buffer, <<>>)
+  case find_crlf_position(buffer, 0) {
+    Ok(pos) ->
+      case buffer {
+        <<line:size(pos)-bytes, "\r\n", rest:bits>> -> Ok(#(line, rest))
+        _ -> Error(Nil)
+      }
+    Error(Nil) -> Error(Nil)
+  }
 }
 
-fn read_line_loop(buffer: BitArray, msg: BitArray) {
+fn find_crlf_position(buffer: BitArray, pos: Int) -> Result(Int, Nil) {
   case buffer {
-    <<"\r\n", rest:bits>> -> Ok(#(msg, rest))
-    <<x, rest:bits>> -> read_line_loop(rest, <<msg:bits, x>>)
+    <<"\r\n", _:bits>> -> Ok(pos)
+    <<_, rest:bits>> -> find_crlf_position(rest, pos + 1)
     <<>> -> Error(Nil)
     _ -> Error(Nil)
   }
@@ -310,19 +292,17 @@ type ReadBodyResult {
 fn read_body(buffer: BitArray, bytes_to_read: Int) {
   case bytes_to_read > max_payload {
     True -> OverMaxPayload
-    False -> read_body_loop(buffer, <<>>, bytes_to_read)
-  }
-}
-
-fn read_body_loop(buffer: BitArray, payload: BitArray, bytes_to_read: Int) {
-  case bytes_to_read, buffer {
-    0, <<"\r\n", rest:bits>> -> BodyReadSuccess(payload, rest)
-    0, <<>> -> BodyTooShort
-    0, <<"\r">> -> BodyTooShort
-    n, <<>> if n > 0 -> BodyTooShort
-    n, <<x, rest:bits>> if n > 0 ->
-      read_body_loop(rest, <<payload:bits, x>>, n - 1)
-    _, _ -> BodyReadFail
+    False ->
+      case buffer {
+        <<payload:size(bytes_to_read)-bytes, "\r\n", rest:bits>> ->
+          BodyReadSuccess(payload, rest)
+        _ -> {
+          case bit_array.byte_size(buffer) < bytes_to_read + 2 {
+            True -> BodyTooShort
+            False -> BodyReadFail
+          }
+        }
+      }
   }
 }
 
