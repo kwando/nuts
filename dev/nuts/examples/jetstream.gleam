@@ -3,7 +3,7 @@ import gleam/erlang/process
 import gleam/int
 import gleam/io
 import gleam/json
-import gleam/option
+import gleam/option.{Some}
 import gleam/result
 import gleam/time/calendar
 import gleam/time/duration
@@ -11,7 +11,9 @@ import gleam/time/timestamp
 import gleam_community/ansi
 import nuts
 import nuts/internal/jetstream
+import nuts/internal/stream
 import nuts/internal/stream_consumer
+import nuts/jetstream as stream_api
 
 pub fn cyan_logger(msg) {
   io.println_error(msg |> ansi.cyan)
@@ -30,10 +32,34 @@ pub fn main() {
     |> nuts.start(nuts_name, _)
 
   let subject = process.named_subject(nuts_name)
-  let stream_name = "victron"
+  let stream_name = "nmea"
   let inbox_name = "my_inbox_" <> int.random(1_000_000_000) |> int.to_string
   let consumer_name = "nuts_example"
   let batch_size = 100
+  process.sleep(1000)
+  let assert Ok(_) =
+    stream_api.create_stream(
+      subject,
+      stream.StreamConfig(
+        name: stream_name,
+        subjects: ["naboo.nmea"],
+        retention: stream.Interest,
+        max_consumers: -1,
+        max_msgs: -1,
+        max_bytes: 1024 * 1024 * 64,
+        max_age: duration.hours(24),
+        max_msgs_per_subject: -1,
+        max_msg_size: -1,
+        discard: stream.Old,
+        storage: stream.Memory,
+        num_replicas: 1,
+        duplicate_window: duration.minutes(2),
+        description: Some("NMEA"),
+      ),
+    )
+
+  stream_api.list_stream_names(subject)
+  |> echo
 
   let create_consumer_json =
     jetstream.create_durable_consumer(
@@ -46,7 +72,6 @@ pub fn main() {
   |> json.to_string
   |> io.println
 
-  process.sleep(1000)
   nuts.request(
     subject,
     subject: jetstream.create_consumer_topic(stream_name, consumer_name),
