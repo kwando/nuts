@@ -8,6 +8,13 @@ import gleam/string
 
 const max_payload = 1_048_576
 
+const max_line_length = 4096
+
+/// NATS protocol headers are terminated by \r\n (2 bytes). When reading
+/// HMSG bodies the reported header size includes this separator, so we
+/// subtract header_line_end_size to get the actual header content length.
+const header_line_end_size = 2
+
 pub type ServerInfo {
   ServerInfo(
     server_id: String,
@@ -82,13 +89,13 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
           case bit_array.to_string(error) {
             Error(_) ->
               ProtocolError("failed to convert error message to string")
-            Ok(error_message) ->
-              Continue(
-                error_message
-                  |> string.trim_start
-                  |> ERR,
-                rest,
-              )
+            Ok(error_message) -> {
+              let error_message = string.trim_start(error_message)
+              case error_message {
+                "" -> ProtocolError("empty error message")
+                _ -> Continue(ERR(error_message), rest)
+              }
+            }
           }
         }
       }
@@ -141,7 +148,7 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
               use header_bytes <- with_int(header_bytes)
               use total_bytes <- with_int(total_bytes)
 
-              case read_body(rest, header_bytes - 2) {
+              case read_body(rest, header_bytes - header_line_end_size) {
                 BodyReadSuccess(headers, rest) -> {
                   case read_body(rest, total_bytes - header_bytes) {
                     BodyReadSuccess(body, rest) -> {
@@ -174,7 +181,7 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
               use header_bytes <- with_int(header_bytes)
               use total_bytes <- with_int(total_bytes)
 
-              case read_body(rest, header_bytes - 2) {
+              case read_body(rest, header_bytes - header_line_end_size) {
                 BodyReadSuccess(headers, rest) -> {
                   case read_body(rest, total_bytes - header_bytes) {
                     BodyReadSuccess(body, rest) -> {
@@ -228,9 +235,14 @@ fn convert_to_string(
 }
 
 fn has_crlf(buffer: BitArray) {
+  has_crlf_loop(buffer, 0)
+}
+
+fn has_crlf_loop(buffer: BitArray, scanned: Int) {
   case buffer {
     <<"\r\n", _:bits>> -> True
-    <<_, rest:bits>> -> has_crlf(rest)
+    <<_, rest:bits>> if scanned < max_line_length ->
+      has_crlf_loop(rest, scanned + 1)
     _ -> False
   }
 }
@@ -308,7 +320,8 @@ fn read_body(buffer: BitArray, bytes_to_read: Int) {
 fn read_body_loop(buffer: BitArray, payload: BitArray, bytes_to_read: Int) {
   case bytes_to_read, buffer {
     0, <<"\r\n", rest:bits>> -> BodyReadSuccess(payload, rest)
-    0, <<>> | 0, <<"\r">> -> BodyTooShort
+    0, <<>> -> BodyTooShort
+    0, <<"\r">> -> BodyTooShort
     n, <<>> if n > 0 -> BodyTooShort
     n, <<x, rest:bits>> if n > 0 ->
       read_body_loop(rest, <<payload:bits, x>>, n - 1)

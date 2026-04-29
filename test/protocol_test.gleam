@@ -112,7 +112,8 @@ pub fn parse_invalid_command_test() {
 }
 
 pub fn parse_err_test() {
-  assert protocol.parse(<<"-ERR\r\n">>) == Continue(protocol.ERR(""), <<>>)
+  assert protocol.parse(<<"-ERR\r\n">>)
+    == protocol.ProtocolError("empty error message")
   assert protocol.parse(<<"-ERR this is an error\r\n">>)
     == Continue(protocol.ERR("this is an error"), <<>>)
 }
