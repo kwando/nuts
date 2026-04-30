@@ -154,5 +154,8 @@ fn error_to_string(err: nuts.NatsError) -> String {
     nuts.AuthenticationFailed -> "AuthenticationFailed"
     nuts.GenericError(msg) -> "GenericError: " <> msg
     nuts.BadURL -> "BadURL"
+    nuts.JsonDecodeError(decode_err, data) ->
+      "JsonDecodeError: " <> string.inspect(decode_err) <> ", data: "
+        <> string.inspect(data)
   }
 }

@@ -130,11 +130,8 @@ fn list_loop(
                         last_seq,
                         [info, ..acc],
                       )
-                    Error(_) ->
-                      Error(nuts.ProtocolError(
-                        "failed to decode object info at seq "
-                        <> int.to_string(msg_get.seq),
-                      ))
+                    Error(decode_err) ->
+                      Error(nuts.JsonDecodeError(decode_err, data))
                   }
                 Error(_) ->
                   Error(nuts.ProtocolError(
@@ -142,11 +139,8 @@ fn list_loop(
                     <> int.to_string(msg_get.seq),
                   ))
               }
-            Error(_) ->
-              Error(nuts.ProtocolError(
-                "failed to decode msg get response at seq "
-                <> int.to_string(current_seq),
-              ))
+            Error(decode_err) ->
+              Error(nuts.JsonDecodeError(decode_err, response.payload))
           }
         Error(_) -> Ok(list.reverse(acc))
       }
@@ -180,7 +174,8 @@ pub fn get(
       json.parse_bits(response.payload, object_store.msg_get_response_decoder())
     {
       Ok(resp) -> Ok(resp)
-      Error(_) -> Error(nuts.ProtocolError("failed to decode msg get response"))
+      Error(decode_err) ->
+        Error(nuts.JsonDecodeError(decode_err, response.payload))
     },
   )
 
@@ -194,7 +189,7 @@ pub fn get(
   use info <- result.try(
     case json.parse_bits(info_data, object_store.object_info_decoder()) {
       Ok(info) -> Ok(info)
-      Error(_) -> Error(nuts.ProtocolError("failed to decode object info"))
+      Error(decode_err) -> Error(nuts.JsonDecodeError(decode_err, info_data))
     },
   )
 
@@ -283,15 +278,8 @@ fn read_chunks_loop(
                     <> int.to_string(msg_get.seq),
                   ))
               }
-            Error(_) ->
-              Error(nuts.ProtocolError(
-                "failed to decode chunk msg get response. payload: "
-                <> {
-                  response.payload
-                  |> bit_array.to_string
-                  |> result.unwrap("<<binary>>")
-                },
-              ))
+            Error(decode_err) ->
+              Error(nuts.JsonDecodeError(decode_err, response.payload))
           }
         }
         Error(err) -> Error(err)

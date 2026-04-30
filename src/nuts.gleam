@@ -3,6 +3,7 @@ import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/io
+import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
@@ -62,6 +63,7 @@ pub type NatsError {
   AuthenticationFailed
   GenericError(String)
   BadURL
+  JsonDecodeError(json.DecodeError, BitArray)
 }
 
 pub opaque type Message {

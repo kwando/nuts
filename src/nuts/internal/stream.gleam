@@ -186,8 +186,7 @@ pub fn decode_jetstream_response(
     None ->
       case json.parse_bits(bits, decoder) {
         Ok(value) -> Ok(value)
-        Error(_) ->
-          Error(nuts.ProtocolError("failed to decode jetstream response"))
+        Error(decode_err) -> Error(nuts.JsonDecodeError(decode_err, bits))
       }
   }
 }
