@@ -81,8 +81,33 @@ pub type PubAck {
   PubAck(stream: String, seq: Int, domain: Option(String), duplicate: Bool)
 }
 
+pub type JetStreamError {
+  ApiError(code: Int, err_code: Int, description: String)
+  TransportError(nuts.NatsError)
+}
+
 pub type JsonApiError {
   JsonApiError(code: Int, err_code: Int, description: String)
+}
+
+pub fn decode_jetstream_response(
+  bits: BitArray,
+  decoder: decode.Decoder(a),
+) -> Result(a, JetStreamError) {
+  case check_jetstream_error(bits) {
+    Some(error) ->
+      Error(ApiError(
+        code: error.code,
+        err_code: error.err_code,
+        description: error.description,
+      ))
+    None ->
+      case json.parse_bits(bits, decoder) {
+        Ok(value) -> Ok(value)
+        Error(decode_err) ->
+          Error(TransportError(nuts.JsonDecodeError(decode_err, bits)))
+      }
+  }
 }
 
 // ----------------------------------------- Subject builders -----------------------------------------
@@ -176,20 +201,6 @@ fn storage_to_string(storage: StorageType) -> String {
 }
 
 // ----------------------------------------- Response decoding -----------------------------------------
-
-pub fn decode_jetstream_response(
-  bits: BitArray,
-  decoder: decode.Decoder(a),
-) -> Result(a, nuts.NatsError) {
-  case check_jetstream_error(bits) {
-    Some(error) -> Error(nuts.ProtocolError(error.description))
-    None ->
-      case json.parse_bits(bits, decoder) {
-        Ok(value) -> Ok(value)
-        Error(decode_err) -> Error(nuts.JsonDecodeError(decode_err, bits))
-      }
-  }
-}
 
 fn check_jetstream_error(bits: BitArray) -> Option(JsonApiError) {
   let error_decoder = {

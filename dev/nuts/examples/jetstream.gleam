@@ -24,11 +24,11 @@ pub fn main() {
 
   let assert Ok(_) =
     nuts.new("100.121.244.19", 4222)
-    |> nuts.with_logger(nuts.Logger(
-      info: cyan_logger,
-      debug: cyan_logger,
-      warning: cyan_logger,
-    ))
+    //|> nuts.with_logger(nuts.Logger(
+    //  info: cyan_logger,
+    //  debug: cyan_logger,
+    //  warning: cyan_logger,
+    //))
     |> nuts.start(nuts_name, _)
 
   let subject = process.named_subject(nuts_name)

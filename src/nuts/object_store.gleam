@@ -7,12 +7,13 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import nuts
 import nuts/internal/object_store.{type ObjectInfo, type ObjectStoreConfig}
+import nuts/internal/stream.{type JetStreamError}
 import nuts/jetstream
 
 pub fn create_bucket(
   conn: Subject(nuts.Message),
   config: ObjectStoreConfig,
-) -> Result(ObjectStoreConfig, nuts.NatsError) {
+) -> Result(ObjectStoreConfig, JetStreamError) {
   let stream_config = object_store.to_stream_config(config)
 
   use _response <- result.try(jetstream.create_stream(conn, stream_config))
@@ -24,7 +25,7 @@ pub fn put(
   bucket: String,
   name: String,
   data: BitArray,
-) -> Result(ObjectInfo, nuts.NatsError) {
+) -> Result(ObjectInfo, JetStreamError) {
   let nuid = object_store.generate_nuid()
   let chunk_subj = object_store.chunks_subject(bucket, nuid)
   let meta_subj = object_store.meta_subject(bucket, name)
@@ -37,6 +38,7 @@ pub fn put(
     |> list.try_map(fn(chunk) {
       nuts.new_message(chunk_subj, chunk)
       |> nuts.publish(conn, _)
+      |> result.map_error(stream.TransportError)
     })
     |> result.map(fn(_) { Nil }),
   )
@@ -62,13 +64,14 @@ pub fn put(
   nuts.new_message(meta_subj, meta_payload)
   |> nuts.add_header("Nats-Rollup", "sub")
   |> nuts.publish(conn, _)
+  |> result.map_error(stream.TransportError)
   |> result.map(fn(_) { info })
 }
 
 pub fn list(
   conn: Subject(nuts.Message),
   bucket: String,
-) -> Result(List(ObjectInfo), nuts.NatsError) {
+) -> Result(List(ObjectInfo), JetStreamError) {
   let msg_get_subj = object_store.msg_get_subject(bucket)
   let meta_wildcard = object_store.all_meta_subject(bucket)
   let stream_name = object_store.stream_name(bucket)
@@ -93,7 +96,7 @@ fn list_loop(
   current_seq: Int,
   last_seq: Int,
   acc: List(ObjectInfo),
-) -> Result(List(ObjectInfo), nuts.NatsError) {
+) -> Result(List(ObjectInfo), JetStreamError) {
   case current_seq > last_seq {
     True -> Ok(list.reverse(acc))
     False -> {
@@ -110,7 +113,7 @@ fn list_loop(
       {
         Ok(response) ->
           case
-            json.parse_bits(
+            stream.decode_jetstream_response(
               response.payload,
               object_store.msg_get_response_decoder(),
             )
@@ -131,16 +134,22 @@ fn list_loop(
                         [info, ..acc],
                       )
                     Error(decode_err) ->
-                      Error(nuts.JsonDecodeError(decode_err, data))
+                      Error(
+                        stream.TransportError(nuts.JsonDecodeError(
+                          decode_err,
+                          data,
+                        )),
+                      )
                   }
                 Error(_) ->
-                  Error(nuts.ProtocolError(
-                    "failed to decode base64 data at seq "
-                    <> int.to_string(msg_get.seq),
-                  ))
+                  Error(
+                    stream.TransportError(nuts.ProtocolError(
+                      "failed to decode base64 data at seq "
+                      <> int.to_string(msg_get.seq),
+                    )),
+                  )
               }
-            Error(decode_err) ->
-              Error(nuts.JsonDecodeError(decode_err, response.payload))
+            Error(err) -> Error(err)
           }
         Error(_) -> Ok(list.reverse(acc))
       }
@@ -152,7 +161,7 @@ pub fn get(
   conn: Subject(nuts.Message),
   bucket: String,
   name: String,
-) -> Result(BitArray, nuts.NatsError) {
+) -> Result(BitArray, JetStreamError) {
   let meta_subj = object_store.meta_subject(bucket, name)
   let msg_get_subj = object_store.msg_get_subject(bucket)
 
@@ -161,40 +170,43 @@ pub fn get(
     |> json.to_string
     |> bit_array.from_string
 
-  use response <- result.try(nuts.request(
-    conn,
-    msg_get_subj,
-    headers: [],
-    payload: get_meta_payload,
-    timeout: 5000,
-  ))
-
-  use msg_get <- result.try(
-    case
-      json.parse_bits(response.payload, object_store.msg_get_response_decoder())
-    {
-      Ok(resp) -> Ok(resp)
-      Error(decode_err) ->
-        Error(nuts.JsonDecodeError(decode_err, response.payload))
-    },
+  use response <- result.try(
+    nuts.request(
+      conn,
+      msg_get_subj,
+      headers: [],
+      payload: get_meta_payload,
+      timeout: 5000,
+    )
+    |> result.map_error(stream.TransportError),
   )
+
+  use msg_get <- result.try(stream.decode_jetstream_response(
+    response.payload,
+    object_store.msg_get_response_decoder(),
+  ))
 
   use info_data <- result.try(
     object_store.decoded_msg_data(msg_get.data)
-    |> result.replace_error(nuts.ProtocolError(
-      "failed to decode base64 metadata",
-    )),
+    |> result.replace_error(
+      stream.TransportError(nuts.ProtocolError(
+        "failed to decode base64 metadata",
+      )),
+    ),
   )
 
   use info <- result.try(
     case json.parse_bits(info_data, object_store.object_info_decoder()) {
       Ok(info) -> Ok(info)
-      Error(decode_err) -> Error(nuts.JsonDecodeError(decode_err, info_data))
+      Error(decode_err) ->
+        Error(
+          stream.TransportError(nuts.JsonDecodeError(decode_err, info_data)),
+        )
     },
   )
 
   case info.deleted {
-    True -> Error(nuts.GenericError("object is deleted"))
+    True -> Error(stream.TransportError(nuts.GenericError("object is deleted")))
     False ->
       case info.size {
         0 -> Ok(<<>>)
@@ -207,7 +219,10 @@ pub fn get(
 
               case object_store.verify_digest(data, info.digest) {
                 True -> Ok(data)
-                False -> Error(nuts.ProtocolError("digest mismatch"))
+                False ->
+                  Error(
+                    stream.TransportError(nuts.ProtocolError("digest mismatch")),
+                  )
               }
             }
             Error(err) -> Error(err)
@@ -222,7 +237,7 @@ fn read_chunks(
   msg_get_subj: String,
   chunk_subj: String,
   total_chunks: Int,
-) -> Result(List(BitArray), nuts.NatsError) {
+) -> Result(List(BitArray), JetStreamError) {
   read_chunks_loop(conn, msg_get_subj, chunk_subj, total_chunks, [], 0, None)
 }
 
@@ -234,7 +249,7 @@ fn read_chunks_loop(
   acc: List(BitArray),
   collected_size: Int,
   next_seq: Option(Int),
-) -> Result(List(BitArray), nuts.NatsError) {
+) -> Result(List(BitArray), JetStreamError) {
   case list.length(acc) >= total_chunks {
     True -> Ok(list.reverse(acc))
     False -> {
@@ -253,7 +268,7 @@ fn read_chunks_loop(
       {
         Ok(response) -> {
           case
-            json.parse_bits(
+            stream.decode_jetstream_response(
               response.payload,
               object_store.msg_get_response_decoder(),
             )
@@ -273,16 +288,17 @@ fn read_chunks_loop(
                   )
                 }
                 Error(_) ->
-                  Error(nuts.ProtocolError(
-                    "failed to decode base64 chunk data for seq "
-                    <> int.to_string(msg_get.seq),
-                  ))
+                  Error(
+                    stream.TransportError(nuts.ProtocolError(
+                      "failed to decode base64 chunk data for seq "
+                      <> int.to_string(msg_get.seq),
+                    )),
+                  )
               }
-            Error(decode_err) ->
-              Error(nuts.JsonDecodeError(decode_err, response.payload))
+            Error(err) -> Error(err)
           }
         }
-        Error(err) -> Error(err)
+        Error(err) -> Error(stream.TransportError(err))
       }
     }
   }

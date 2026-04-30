@@ -4,7 +4,6 @@ import gleam/dynamic/decode
 import gleam/json
 import gleam/option.{type Option, None}
 import gleam/result
-import gleam/string
 import gleam/time/duration.{type Duration}
 import nuts/internal/stream
 
@@ -120,7 +119,7 @@ pub fn to_stream_config(config: ObjectStoreConfig) -> stream.StreamConfig {
 // ----------------------------------------- Name encoding -----------------------------------------
 
 pub fn encode_name(name: String) -> String {
-  bit_array.base64_url_encode(bit_array.from_string(name), False)
+  bit_array.base64_url_encode(bit_array.from_string(name), True)
 }
 
 pub fn decode_name(encoded: String) -> Result(String, Nil) {
@@ -139,19 +138,12 @@ pub fn generate_nuid() -> String {
 
 pub fn compute_digest(data: BitArray) -> String {
   let hash = crypto.hash(crypto.Sha256, data)
-  "SHA-256=" <> bit_array.base64_url_encode(hash, False)
+  "SHA-256=" <> bit_array.base64_url_encode(hash, True)
 }
 
 pub fn verify_digest(data: BitArray, digest: String) -> Bool {
-  let computed = compute_digest(data)
-  strip_padding(computed) == strip_padding(digest)
+  compute_digest(data) == digest
 }
-
-fn strip_padding(s: String) -> String {
-  string.replace(s, each: "=", with: "")
-}
-
-// ----------------------------------------- Chunk helpers -----------------------------------------
 
 pub fn split_into_chunks(data: BitArray) -> List(BitArray) {
   split_into_chunks_with_size(data, default_chunk_size)

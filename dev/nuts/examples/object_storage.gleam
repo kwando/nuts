@@ -146,7 +146,21 @@ pub fn main() {
   nuts.shutdown(nats_conn)
 }
 
-fn error_to_string(err: nuts.NatsError) -> String {
+fn error_to_string(err: stream.JetStreamError) -> String {
+  case err {
+    stream.ApiError(code:, err_code:, description:) ->
+      "ApiError("
+      <> int.to_string(code)
+      <> ", "
+      <> int.to_string(err_code)
+      <> "): "
+      <> description
+    stream.TransportError(nats_err) ->
+      "TransportError(" <> nats_error_to_string(nats_err) <> ")"
+  }
+}
+
+fn nats_error_to_string(err: nuts.NatsError) -> String {
   case err {
     nuts.NotConnected -> "NotConnected"
     nuts.NetworkError(e) -> "NetworkError: " <> string.inspect(e)
