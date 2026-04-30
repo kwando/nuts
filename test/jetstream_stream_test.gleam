@@ -34,6 +34,8 @@ pub fn create_stream_test() {
       num_replicas: 1,
       duplicate_window: duration.milliseconds(120_000),
       description: None,
+      allow_rollup: False,
+      allow_direct: False,
     )
 
   let assert Ok(response) = jetstream.create_stream(conn, config)
@@ -65,6 +67,8 @@ pub fn stream_info_test() {
       num_replicas: 1,
       duplicate_window: duration.milliseconds(120_000),
       description: None,
+      allow_rollup: False,
+      allow_direct: False,
     )
 
   let assert Ok(_) = jetstream.create_stream(conn, config)
@@ -99,6 +103,8 @@ pub fn update_stream_test() {
       num_replicas: 1,
       duplicate_window: duration.milliseconds(120_000),
       description: None,
+      allow_rollup: False,
+      allow_direct: False,
     )
 
   let assert Ok(_) = jetstream.create_stream(conn, config)
@@ -119,6 +125,8 @@ pub fn update_stream_test() {
       num_replicas: 1,
       duplicate_window: duration.milliseconds(120_000),
       description: None,
+      allow_rollup: False,
+      allow_direct: False,
     )
 
   let assert Ok(response) = jetstream.update_stream(conn, updated)
@@ -151,6 +159,8 @@ pub fn list_stream_names_test() {
       num_replicas: 1,
       duplicate_window: duration.milliseconds(120_000),
       description: None,
+      allow_rollup: False,
+      allow_direct: False,
     )
 
   let assert Ok(_) = jetstream.create_stream(conn, config)
@@ -185,6 +195,8 @@ pub fn purge_stream_test() {
       num_replicas: 1,
       duplicate_window: duration.milliseconds(120_000),
       description: None,
+      allow_rollup: False,
+      allow_direct: False,
     )
 
   let assert Ok(_) = jetstream.create_stream(conn, config)
@@ -219,6 +231,8 @@ pub fn create_duplicate_idempotent_test() {
       num_replicas: 1,
       duplicate_window: duration.milliseconds(120_000),
       description: None,
+      allow_rollup: False,
+      allow_direct: False,
     )
 
   let assert Ok(response) = jetstream.create_stream(conn, config)
@@ -265,6 +279,8 @@ pub fn update_stream_not_found_error_test() {
       num_replicas: 1,
       duplicate_window: duration.milliseconds(120_000),
       description: None,
+      allow_rollup: False,
+      allow_direct: False,
     )
 
   let assert Error(_) = jetstream.update_stream(conn, config)
@@ -307,6 +323,8 @@ pub fn publish_test() {
       num_replicas: 1,
       duplicate_window: duration.milliseconds(120_000),
       description: None,
+      allow_rollup: False,
+      allow_direct: False,
     )
 
   let assert Ok(_) = jetstream.create_stream(conn, config)

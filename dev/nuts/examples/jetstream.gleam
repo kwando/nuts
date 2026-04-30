@@ -55,6 +55,8 @@ pub fn main() {
         num_replicas: 1,
         duplicate_window: duration.minutes(2),
         description: Some("NMEA"),
+        allow_rollup: False,
+        allow_direct: False,
       ),
     )
 

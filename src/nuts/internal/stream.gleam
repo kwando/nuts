@@ -36,6 +36,8 @@ pub type StreamConfig {
     num_replicas: Int,
     duplicate_window: Duration,
     description: Option(String),
+    allow_rollup: Bool,
+    allow_direct: Bool,
   )
 }
 
@@ -123,6 +125,8 @@ pub fn stream_config_to_json(config: StreamConfig) -> json.Json {
     num_replicas:,
     duplicate_window:,
     description:,
+    allow_rollup:,
+    allow_direct:,
   ) = config
   json.object(
     [
@@ -142,6 +146,8 @@ pub fn stream_config_to_json(config: StreamConfig) -> json.Json {
         "duplicate_window",
         json.int(duration.to_milliseconds(duplicate_window) * 1_000_000),
       ),
+      #("allow_rollup_hdrs", json.bool(allow_rollup)),
+      #("allow_direct", json.bool(allow_direct)),
     ]
     |> optional("description", description, json.string),
   )
@@ -249,6 +255,12 @@ fn stream_config_decoder() -> decode.Decoder(StreamConfig) {
     None,
     decode.optional(decode.string),
   )
+  use allow_rollup <- decode.optional_field(
+    "allow_rollup_hdrs",
+    False,
+    decode.bool,
+  )
+  use allow_direct <- decode.optional_field("allow_direct", False, decode.bool)
 
   let retention = case retention {
     "limits" -> Limits
@@ -282,6 +294,8 @@ fn stream_config_decoder() -> decode.Decoder(StreamConfig) {
     num_replicas:,
     duplicate_window: duration.milliseconds(duplicate_window / 1_000_000),
     description:,
+    allow_rollup:,
+    allow_direct:,
   ))
 }
 
