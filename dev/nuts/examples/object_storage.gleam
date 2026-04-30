@@ -134,7 +134,7 @@ pub fn main() {
     object_store.get(nats_conn, "filez", "/mnt/ramdisk/metrics.20260429.log.gz")
   {
     Ok(data) -> {
-      let assert Ok(_) = simplifile.write_bits("DOWNLOADED", data)
+      let assert Ok(_) = simplifile.write_bits("DOWNLOADED.log.gz", data)
       Nil
     }
     Error(err) -> {

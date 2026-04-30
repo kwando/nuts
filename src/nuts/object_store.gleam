@@ -5,7 +5,6 @@ import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
-import gleam/string
 import nuts
 import nuts/internal/object_store.{type ObjectInfo, type ObjectStoreConfig}
 import nuts/jetstream
@@ -131,14 +130,10 @@ fn list_loop(
                         last_seq,
                         [info, ..acc],
                       )
-                    Error(err) ->
+                    Error(_) ->
                       Error(nuts.ProtocolError(
                         "failed to decode object info at seq "
-                        <> int.to_string(msg_get.seq)
-                        <> "\n"
-                        <> string.inspect(err)
-                        <> "\n"
-                        <> string.inspect(data),
+                        <> int.to_string(msg_get.seq),
                       ))
                   }
                 Error(_) ->
@@ -249,7 +244,11 @@ fn read_chunks_loop(
     True -> Ok(list.reverse(acc))
     False -> {
       let payload = case next_seq {
-        Some(seq) -> json.object([#("seq", json.int(seq))])
+        Some(seq) ->
+          json.object([
+            #("seq", json.int(seq)),
+            #("next_by_subj", json.string(chunk_subj)),
+          ])
         None -> json.object([#("next_by_subj", json.string(chunk_subj))])
       }
       let payload = payload |> json.to_string |> bit_array.from_string

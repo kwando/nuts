@@ -60,8 +60,7 @@ pub fn main() {
       ),
     )
 
-  stream_api.list_stream_names(subject)
-  |> echo
+  let assert Ok(_) = stream_api.list_stream_names(subject)
 
   let create_consumer_json =
     jetstream.create_durable_consumer(
@@ -74,14 +73,15 @@ pub fn main() {
   |> json.to_string
   |> io.println
 
-  nuts.request(
-    subject,
-    subject: jetstream.create_consumer_topic(stream_name, consumer_name),
-    headers: [],
-    payload: create_consumer_json |> json.to_string |> bit_array.from_string,
-    timeout: 1000,
-  )
-  |> echo
+  let _ =
+    nuts.request(
+      subject,
+      subject: jetstream.create_consumer_topic(stream_name, consumer_name),
+      headers: [],
+      payload: create_consumer_json |> json.to_string |> bit_array.from_string,
+      timeout: 1000,
+    )
+    |> echo
 
   //  let _ =
   //    nuts.new_message(

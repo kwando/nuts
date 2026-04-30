@@ -4,6 +4,7 @@ import gleam/dynamic/decode
 import gleam/json
 import gleam/option.{type Option, None}
 import gleam/result
+import gleam/string
 import gleam/time/duration.{type Duration}
 import nuts/internal/stream
 
@@ -142,7 +143,12 @@ pub fn compute_digest(data: BitArray) -> String {
 }
 
 pub fn verify_digest(data: BitArray, digest: String) -> Bool {
-  compute_digest(data) == digest
+  let computed = compute_digest(data)
+  strip_padding(computed) == strip_padding(digest)
+}
+
+fn strip_padding(s: String) -> String {
+  string.replace(s, each: "=", with: "")
 }
 
 // ----------------------------------------- Chunk helpers -----------------------------------------

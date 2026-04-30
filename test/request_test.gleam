@@ -1,7 +1,5 @@
-import gleam/bit_array
 import gleam/erlang/process
 import gleam/option
-import gleam/string
 import nuts as nats
 import nuts/test_utils
 
@@ -49,7 +47,7 @@ fn echo_service_loop(nats_conn, subject: process.Subject(nats.NatsMessage)) {
           nats.new_message(reply_to, msg.payload)
           |> nats.publish(nats_conn, _)
         }
-        option.None -> todo
+        option.None -> echo_service_loop(nats_conn, subject)
       }
 
       echo_service_loop(nats_conn, subject)
