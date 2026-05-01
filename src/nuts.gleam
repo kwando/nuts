@@ -99,6 +99,7 @@ pub opaque type Message {
   SubscriberDown(process.Down)
   Unsubscribe(Subscription, Subject(Result(Nil, NatsError)))
   Shutdown(Subject(Nil))
+  Flush(Subject(Result(Nil, NatsError)))
   Request(
     subject: String,
     headers: List(#(String, String)),
@@ -196,6 +197,7 @@ type ClientState {
     request_map: Dict(String, Subject(Result(NatsMessage, NatsError))),
     inbox_prefix: String,
     ping_ref: Option(Reference),
+    flush_reply: Option(Subject(Result(Nil, NatsError))),
   )
 }
 
@@ -217,6 +219,7 @@ pub fn start(process_name: process.Name(Message), options: Options) {
       request_map: dict.new(),
       inbox_prefix: inbox.generate_prefix(),
       ping_ref: None,
+      flush_reply: None,
     ))
     |> actor.selecting(
       process.new_selector()
@@ -399,6 +402,26 @@ fn handle_message(
       actor.send(reply, Nil)
       actor.stop()
     }
+    Flush(reply) -> {
+      case state.socket {
+        Some(_) -> {
+          case send_bits(state, command.ping()) {
+            Ok(_) ->
+              actor.continue(ClientState(..state, flush_reply: Some(reply)))
+            Error(_) -> {
+              actor.send(reply, Error(NotConnected))
+              state
+              |> close_connection()
+              |> actor.continue()
+            }
+          }
+        }
+        None -> {
+          actor.send(reply, Error(NotConnected))
+          actor.continue(state)
+        }
+      }
+    }
     Request(subject:, headers:, payload:, reply:, timeout:) -> {
       let inbox =
         inbox.new_inbox(state.inbox_prefix, state.next_sid |> int.to_base36)
@@ -505,6 +528,10 @@ fn close_connection(state: ClientState) {
   case state.socket {
     Some(socket) -> {
       let _ = mug.shutdown(socket)
+      case state.flush_reply {
+        Some(reply) -> actor.send(reply, Error(NotConnected))
+        None -> Nil
+      }
 
       ClientState(
         ..state,
@@ -513,6 +540,7 @@ fn close_connection(state: ClientState) {
         parser_config: protocol.default_parser_config(),
         connection_attempt: 1,
         ping_ref: None,
+        flush_reply: None,
       )
       |> setup_connection
     }
@@ -651,7 +679,13 @@ fn handle_server_message(
         state.options.ping_interval,
         PingInterval(ping_ref),
       )
-      Ok(ClientState(..state, ping_ref: Some(ping_ref)))
+      case state.flush_reply {
+        Some(reply) -> {
+          actor.send(reply, Ok(Nil))
+          Ok(ClientState(..state, ping_ref: Some(ping_ref), flush_reply: None))
+        }
+        None -> Ok(ClientState(..state, ping_ref: Some(ping_ref)))
+      }
     }
     protocol.Msg(topic:, sid:, reply_to:, payload:) -> {
       broadcast_message(
@@ -811,6 +845,10 @@ pub fn unsubscribe(conn: Subject(Message), subscription: Subscription) {
 
 pub fn shutdown(conn: Subject(Message)) -> Nil {
   actor.call(conn, actor_timeout, Shutdown)
+}
+
+pub fn flush(conn: Subject(Message), timeout: Int) -> Result(Nil, NatsError) {
+  actor.call(conn, timeout + 5000, Flush)
 }
 
 // Logger

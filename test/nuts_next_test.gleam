@@ -30,10 +30,13 @@ pub fn integration_test() {
     |> nats.reply_to(Some("INBOX-2387131"))
     |> nats.publish(nats_conn, _)
 
+  // first subject should receive 2 messages
   let assert Ok(_) = process.receive(message_subject |> nats.get_subject, 1000)
     as "message not received"
   let assert Ok(_) = process.receive(message_subject |> nats.get_subject, 1000)
     as "message not received"
+
+  // second subject should also receive 2 messages
   let assert Ok(_) = process.receive(message_subject2 |> nats.get_subject, 1000)
     as "message not received"
   let assert Ok(_) = process.receive(message_subject2 |> nats.get_subject, 1000)
@@ -110,10 +113,4 @@ pub fn reconnect_and_resubscribe_test() {
 
     assert expected_payload == actual_payload
   }
-}
-
-pub fn main() {
-  let _ = integration_test()
-  let _ = bad_server_test()
-  let _ = reconnect_and_resubscribe_test()
 }
