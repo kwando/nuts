@@ -27,6 +27,7 @@ pub opaque type Options {
     port: Int,
     nkey_seed: Option(String),
     reconnect_interval: Int,
+    reconnect_max: Int,
     logger: Logger,
     ping_interval: Int,
     ping_timeout: Int,
@@ -39,6 +40,7 @@ pub fn new(host: String, port: Int) -> Options {
     port:,
     nkey_seed: None,
     reconnect_interval: 1000,
+    reconnect_max: 30_000,
     logger: noop_logger(),
     ping_interval: 300_000,
     ping_timeout: 30_000,
@@ -59,6 +61,10 @@ pub fn with_ping_interval(options: Options, ms: Int) -> Options {
 
 pub fn with_ping_timeout(options: Options, ms: Int) -> Options {
   Options(..options, ping_timeout: ms)
+}
+
+pub fn with_reconnect(options: Options, initial: Int, max: Int) -> Options {
+  Options(..options, reconnect_interval: initial, reconnect_max: max)
 }
 
 pub type NatsMessage {
@@ -515,8 +521,33 @@ fn close_connection(state: ClientState) {
 }
 
 fn schedule_reconnect(state: ClientState) {
-  process.send_after(state.self, state.options.reconnect_interval, Connect)
+  let delay =
+    exponential_delay(
+      state.options.reconnect_interval,
+      state.options.reconnect_max,
+      state.connection_attempt,
+    )
+  state.logger.debug("reconnect in " <> int.to_string(delay) <> "ms")
+  process.send_after(state.self, delay, Connect)
   state
+}
+
+fn exponential_delay(initial: Int, max: Int, attempt: Int) -> Int {
+  let base = case attempt {
+    a if a <= 2 -> initial
+    _ -> double_repeatedly(initial, attempt - 2, max)
+  }
+  let capped = int.min(base, max)
+  let jitter = int.random(capped / 10 + 1)
+  capped + jitter
+}
+
+fn double_repeatedly(value: Int, times: Int, cap: Int) -> Int {
+  case times, value >= cap {
+    0, _ -> value
+    _, True -> cap
+    _, _ -> double_repeatedly(value * 2, times - 1, cap)
+  }
 }
 
 fn parse_server_messages(
