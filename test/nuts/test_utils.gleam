@@ -42,6 +42,27 @@ pub fn with_nats_server(callback: fn(Int) -> a) -> a {
   with_nats_server_on_port(port, fn() { callback(port) })
 }
 
+pub type Context {
+  Context(
+    port: Int,
+    conn: process.Subject(nats.Message),
+    name: process.Name(nats.Message),
+  )
+}
+
+pub fn with_context(next) {
+  use port <- with_nats_server()
+  let name = process.new_name("flush-test")
+
+  let options = nats.new("127.0.0.1", port)
+  let conn = process.named_subject(name)
+
+  let assert Ok(_) = nats.start(name, options)
+  assert await_connected(conn, 5)
+
+  next(Context(port, conn, name))
+}
+
 pub fn await_connected(subject: process.Subject(nats.Message), attempts: Int) {
   use <- bool.guard(when: attempts == 0, return: False)
   case nats.is_connected(subject) {

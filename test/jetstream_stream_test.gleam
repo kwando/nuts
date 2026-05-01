@@ -1,22 +1,14 @@
 import gleam/bit_array
-import gleam/erlang/process
 import gleam/list
 import gleam/option.{None}
 import gleam/time/duration
 import gleeunit/should
-import nuts as nats
 import nuts/internal/stream
 import nuts/jetstream
 import nuts/test_utils
 
 pub fn create_stream_test() {
-  use port <- test_utils.with_nats_server()
-  let options = nats.new("127.0.0.1", port)
-  let name = process.new_name("nats-jetstream-test")
-  let conn = process.named_subject(name)
-
-  let assert Ok(_) = nats.start(name, options)
-  assert test_utils.await_connected(conn, 5)
+  use ctx <- test_utils.with_context()
 
   let config =
     stream.StreamConfig(
@@ -38,18 +30,12 @@ pub fn create_stream_test() {
       allow_direct: False,
     )
 
-  let assert Ok(response) = jetstream.create_stream(conn, config)
+  let assert Ok(response) = jetstream.create_stream(ctx.conn, config)
   response.config.name |> should.equal("TEST_STREAM")
 }
 
 pub fn stream_info_test() {
-  use port <- test_utils.with_nats_server()
-  let options = nats.new("127.0.0.1", port)
-  let name = process.new_name("nats-jetstream-test")
-  let conn = process.named_subject(name)
-
-  let assert Ok(_) = nats.start(name, options)
-  assert test_utils.await_connected(conn, 5)
+  use ctx <- test_utils.with_context()
 
   let config =
     stream.StreamConfig(
@@ -71,21 +57,15 @@ pub fn stream_info_test() {
       allow_direct: False,
     )
 
-  let assert Ok(_) = jetstream.create_stream(conn, config)
-  let assert Ok(response) = jetstream.stream_info(conn, "INFO_TEST")
+  let assert Ok(_) = jetstream.create_stream(ctx.conn, config)
+  let assert Ok(response) = jetstream.stream_info(ctx.conn, "INFO_TEST")
   response.config.name |> should.equal("INFO_TEST")
   response.config.subjects |> should.equal(["info.test.>"])
   response.state.messages |> should.equal(0)
 }
 
 pub fn update_stream_test() {
-  use port <- test_utils.with_nats_server()
-  let options = nats.new("127.0.0.1", port)
-  let name = process.new_name("nats-jetstream-test")
-  let conn = process.named_subject(name)
-
-  let assert Ok(_) = nats.start(name, options)
-  assert test_utils.await_connected(conn, 5)
+  use ctx <- test_utils.with_context()
 
   let config =
     stream.StreamConfig(
@@ -107,7 +87,7 @@ pub fn update_stream_test() {
       allow_direct: False,
     )
 
-  let assert Ok(_) = jetstream.create_stream(conn, config)
+  let assert Ok(_) = jetstream.create_stream(ctx.conn, config)
 
   let updated =
     stream.StreamConfig(
@@ -129,19 +109,13 @@ pub fn update_stream_test() {
       allow_direct: False,
     )
 
-  let assert Ok(response) = jetstream.update_stream(conn, updated)
+  let assert Ok(response) = jetstream.update_stream(ctx.conn, updated)
   response.config.max_msgs |> should.equal(200)
   response.config.discard |> should.equal(stream.New)
 }
 
 pub fn list_stream_names_test() {
-  use port <- test_utils.with_nats_server()
-  let options = nats.new("127.0.0.1", port)
-  let name = process.new_name("nats-jetstream-test")
-  let conn = process.named_subject(name)
-
-  let assert Ok(_) = nats.start(name, options)
-  assert test_utils.await_connected(conn, 5)
+  use ctx <- test_utils.with_context()
 
   let config =
     stream.StreamConfig(
@@ -163,21 +137,15 @@ pub fn list_stream_names_test() {
       allow_direct: False,
     )
 
-  let assert Ok(_) = jetstream.create_stream(conn, config)
-  let assert Ok(names) = jetstream.list_stream_names(conn)
+  let assert Ok(_) = jetstream.create_stream(ctx.conn, config)
+  let assert Ok(names) = jetstream.list_stream_names(ctx.conn)
 
   list.any(names.streams, fn(n) { n == "NAMES_TEST" })
   |> should.be_true
 }
 
 pub fn purge_stream_test() {
-  use port <- test_utils.with_nats_server()
-  let options = nats.new("127.0.0.1", port)
-  let name = process.new_name("nats-jetstream-test")
-  let conn = process.named_subject(name)
-
-  let assert Ok(_) = nats.start(name, options)
-  assert test_utils.await_connected(conn, 5)
+  use ctx <- test_utils.with_context()
 
   let config =
     stream.StreamConfig(
@@ -199,21 +167,15 @@ pub fn purge_stream_test() {
       allow_direct: False,
     )
 
-  let assert Ok(_) = jetstream.create_stream(conn, config)
+  let assert Ok(_) = jetstream.create_stream(ctx.conn, config)
 
-  let assert Ok(result) = jetstream.purge_stream(conn, "PURGE_TEST")
+  let assert Ok(result) = jetstream.purge_stream(ctx.conn, "PURGE_TEST")
   result.success |> should.be_true
   result.purged |> should.equal(0)
 }
 
 pub fn create_duplicate_idempotent_test() {
-  use port <- test_utils.with_nats_server()
-  let options = nats.new("127.0.0.1", port)
-  let name = process.new_name("nats-jetstream-test")
-  let conn = process.named_subject(name)
-
-  let assert Ok(_) = nats.start(name, options)
-  assert test_utils.await_connected(conn, 5)
+  use ctx <- test_utils.with_context()
 
   let config =
     stream.StreamConfig(
@@ -235,33 +197,20 @@ pub fn create_duplicate_idempotent_test() {
       allow_direct: False,
     )
 
-  let assert Ok(response) = jetstream.create_stream(conn, config)
+  let assert Ok(response) = jetstream.create_stream(ctx.conn, config)
   response.config.name |> should.equal("DUP_TEST")
 
-  let assert Ok(dup) = jetstream.create_stream(conn, config)
+  let assert Ok(dup) = jetstream.create_stream(ctx.conn, config)
   dup.config.name |> should.equal("DUP_TEST")
 }
 
 pub fn stream_info_not_found_error_test() {
-  use port <- test_utils.with_nats_server()
-  let options = nats.new("127.0.0.1", port)
-  let name = process.new_name("nats-jetstream-test")
-  let conn = process.named_subject(name)
-
-  let assert Ok(_) = nats.start(name, options)
-  assert test_utils.await_connected(conn, 5)
-
-  let assert Error(_) = jetstream.stream_info(conn, "DOES_NOT_EXIST")
+  use ctx <- test_utils.with_context()
+  let assert Error(_) = jetstream.stream_info(ctx.conn, "DOES_NOT_EXIST")
 }
 
 pub fn update_stream_not_found_error_test() {
-  use port <- test_utils.with_nats_server()
-  let options = nats.new("127.0.0.1", port)
-  let name = process.new_name("nats-jetstream-test")
-  let conn = process.named_subject(name)
-
-  let assert Ok(_) = nats.start(name, options)
-  assert test_utils.await_connected(conn, 5)
+  use ctx <- test_utils.with_context()
 
   let config =
     stream.StreamConfig(
@@ -283,29 +232,16 @@ pub fn update_stream_not_found_error_test() {
       allow_direct: False,
     )
 
-  let assert Error(_) = jetstream.update_stream(conn, config)
+  let assert Error(_) = jetstream.update_stream(ctx.conn, config)
 }
 
 pub fn purge_stream_not_found_error_test() {
-  use port <- test_utils.with_nats_server()
-  let options = nats.new("127.0.0.1", port)
-  let name = process.new_name("nats-jetstream-test")
-  let conn = process.named_subject(name)
-
-  let assert Ok(_) = nats.start(name, options)
-  assert test_utils.await_connected(conn, 5)
-
-  let assert Error(_) = jetstream.purge_stream(conn, "DOES_NOT_EXIST")
+  use ctx <- test_utils.with_context()
+  let assert Error(_) = jetstream.purge_stream(ctx.conn, "DOES_NOT_EXIST")
 }
 
 pub fn publish_test() {
-  use port <- test_utils.with_nats_server()
-  let options = nats.new("127.0.0.1", port)
-  let name = process.new_name("nats-jetstream-pub-test")
-  let conn = process.named_subject(name)
-
-  let assert Ok(_) = nats.start(name, options)
-  assert test_utils.await_connected(conn, 5)
+  use ctx <- test_utils.with_context()
 
   let config =
     stream.StreamConfig(
@@ -327,11 +263,11 @@ pub fn publish_test() {
       allow_direct: False,
     )
 
-  let assert Ok(_) = jetstream.create_stream(conn, config)
+  let assert Ok(_) = jetstream.create_stream(ctx.conn, config)
 
   let assert Ok(ack) =
     jetstream.publish(
-      conn,
+      ctx.conn,
       subject: "pub.test.hello",
       headers: [],
       payload: bit_array.from_string("hello world"),

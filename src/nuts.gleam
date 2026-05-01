@@ -94,6 +94,7 @@ pub opaque type Message {
     subject: String,
     subscriber: Subject(NatsMessage),
     reply: Subject(Result(Subscription, NatsError)),
+    queue_group: Option(String),
   )
   SocketData(mug.TcpMessage)
   SubscriberDown(process.Down)
@@ -118,6 +119,7 @@ type Subscriber {
     monitor: process.Monitor,
     subject: Subject(NatsMessage),
     pattern: String,
+    queue_group: Option(String),
   )
 }
 
@@ -321,7 +323,7 @@ fn handle_message(
           |> actor.continue
         }
       }
-    Subscribe(subject:, subscriber:, reply:) -> {
+    Subscribe(subject:, subscriber:, reply:, queue_group:) -> {
       let sid = state.next_sid |> int.to_base36
       case process.subject_owner(subscriber) {
         Ok(pid) -> {
@@ -329,15 +331,19 @@ fn handle_message(
 
           let state = ClientState(..state, next_sid: state.next_sid + 1)
           let subscriber =
-            Subscriber(sid:, monitor:, subject: subscriber, pattern: subject)
+            Subscriber(
+              sid:,
+              monitor:,
+              subject: subscriber,
+              pattern: subject,
+              queue_group:,
+            )
           actor.send(reply, Ok(Subscription(subscriber:)))
           let state =
             state
             |> update_subscribers(add_subscriber(_, subscriber))
 
-          case
-            send_bits(state, command.sub(subject:, sid:, queue_group: None))
-          {
+          case send_bits(state, command.sub(subject:, sid:, queue_group:)) {
             Ok(Nil) -> {
               actor.continue(state)
             }
@@ -723,7 +729,7 @@ fn resubscribe(state: ClientState) -> Result(ClientState, NatsError) {
           command.sub(
             subject: subscriber.pattern,
             sid: subscriber.sid,
-            queue_group: None,
+            queue_group: subscriber.queue_group,
           ),
         )
       },
@@ -836,7 +842,26 @@ pub fn subscribe(
   nats_subject: String,
 ) -> Result(Subscription, NatsError) {
   let subscriber = process.new_subject()
-  actor.call(conn, actor_timeout, Subscribe(nats_subject, subscriber:, reply: _))
+  actor.call(conn, actor_timeout, Subscribe(
+    nats_subject,
+    subscriber:,
+    reply: _,
+    queue_group: None,
+  ))
+}
+
+pub fn subscribe_with_queue(
+  conn: Subject(Message),
+  nats_subject: String,
+  queue_group: String,
+) -> Result(Subscription, NatsError) {
+  let subscriber = process.new_subject()
+  actor.call(conn, actor_timeout, Subscribe(
+    nats_subject,
+    subscriber:,
+    reply: _,
+    queue_group: Some(queue_group),
+  ))
 }
 
 pub fn unsubscribe(conn: Subject(Message), subscription: Subscription) {
