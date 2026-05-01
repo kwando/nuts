@@ -8,6 +8,8 @@ pub fn parse_ack_test() {
       stream_seq: 1_029_024,
       consumer_seq: 940_949,
       timestamp: t("2026-04-28T08:37:34.785427545Z"),
+      delivery_count: 1,
+      pending: 0,
     )
 
   assert Ok(expected) == jetstream.parse_ack(ack)

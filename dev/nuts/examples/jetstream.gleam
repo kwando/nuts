@@ -32,7 +32,7 @@ pub fn main() {
     |> nuts.start(nuts_name, _)
 
   let subject = process.named_subject(nuts_name)
-  let stream_name = "nmea"
+  let stream_name = "victron"
   let inbox_name = "my_inbox_" <> int.random(1_000_000_000) |> int.to_string
   let consumer_name = "nuts_example"
   process.sleep(1000)
@@ -41,7 +41,7 @@ pub fn main() {
       subject,
       stream.StreamConfig(
         name: stream_name,
-        subjects: ["naboo.nmea"],
+        subjects: ["naboo.victron"],
         retention: stream.Interest,
         max_consumers: -1,
         max_msgs: -1,
@@ -103,6 +103,8 @@ pub fn main() {
         max_messages: 500,
         threshold_messages: 250,
         poll_expire: duration.seconds(30),
+        heartbeat: option.Some(duration.seconds(5)),
+        no_wait: False,
       ),
       fn(msg, info) {
         io.println(
@@ -116,6 +118,7 @@ pub fn main() {
           <> " "
           <> msg.payload |> bit_array.to_string |> result.unwrap("<<binary>>"),
         )
+        jetstream.Ack
       },
     )
 

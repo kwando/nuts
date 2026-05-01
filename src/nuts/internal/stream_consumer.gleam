@@ -4,6 +4,7 @@ import gleam/erlang/process.{type Subject}
 import gleam/erlang/reference.{type Reference}
 import gleam/io
 import gleam/json
+import gleam/list
 import gleam/option
 import gleam/otp/actor
 import gleam/result
@@ -18,7 +19,7 @@ type State {
     self: Subject(Msg),
     poll_ref: Reference,
     pending_messages: Int,
-    handler: fn(nuts.NatsMessage, jetstream.DeliveryInfo) -> Nil,
+    handler: fn(nuts.NatsMessage, jetstream.DeliveryInfo) -> jetstream.AckAction,
   )
 }
 
@@ -29,7 +30,7 @@ type Msg {
 
 pub fn start(
   ctx: Context,
-  handler: fn(nuts.NatsMessage, jetstream.DeliveryInfo) -> Nil,
+  handler: fn(nuts.NatsMessage, jetstream.DeliveryInfo) -> jetstream.AckAction,
 ) -> Result(actor.Started(Nil), actor.StartError) {
   actor.new_with_initialiser(1000, fn(self) {
     // setup subscription on the inbox name
@@ -75,17 +76,34 @@ fn handle_message(state: State, msg: Msg) {
     }
     NatsMsg(msg) -> {
       case state.ctx.inbox_name == msg.subject {
-        True -> state
+        True ->
+          case get_status(msg.headers) {
+            Ok("100" <> _) -> {
+              // heartbeat: reset poll timer, server is still alive
+              let new_poll_ref = reference.new()
+              process.send_after(
+                state.self,
+                state.ctx.poll_expire |> duration.to_milliseconds,
+                PollExpired(new_poll_ref),
+              )
+              State(..state, poll_ref: new_poll_ref)
+            }
+            Ok("408" <> _) ->
+              // request timeout: server has no more messages, re-poll
+              state
+              |> make_poll_request(state.ctx.max_messages)
+            _ -> state
+          }
         False -> {
           let assert Ok(delivery_info) =
             msg.reply_to
             |> option.to_result(Nil)
             |> result.try(jetstream.parse_ack)
 
-          state.handler(msg, delivery_info)
+          let ack_action = state.handler(msg, delivery_info)
 
           let new_pending = state.pending_messages - 1
-          let _ = ack_message(state.ctx, msg)
+          let _ = ack_message(state.ctx, msg, ack_action)
 
           case new_pending <= state.ctx.threshold_messages {
             True -> {
@@ -136,13 +154,20 @@ pub type Context {
     max_messages: Int,
     threshold_messages: Int,
     poll_expire: duration.Duration,
+    heartbeat: option.Option(duration.Duration),
+    no_wait: Bool,
   )
 }
 
 fn new_poll(ctx: Context, batch: Int) {
   nuts.new_message(
     "$JS.API.CONSUMER.MSG.NEXT." <> ctx.stream_name <> "." <> ctx.consumer_name,
-    jetstream.PullNextMessages(batch:, expires: ctx.poll_expire)
+    jetstream.PullNextMessages(
+      batch:,
+      expires: ctx.poll_expire,
+      heartbeat: ctx.heartbeat,
+      no_wait: ctx.no_wait,
+    )
       |> jetstream.consumer_request_to_json()
       |> json.to_string
       |> bit_array.from_string,
@@ -151,12 +176,17 @@ fn new_poll(ctx: Context, batch: Int) {
   |> nuts.publish(ctx.nats_server, _)
 }
 
-fn ack_message(ctx: Context, message: nuts.NatsMessage) {
+fn ack_message(
+  ctx: Context,
+  message: nuts.NatsMessage,
+  action: jetstream.AckAction,
+) {
   case message.reply_to {
     option.Some(ack_reply) -> {
       {
+        let payload = jetstream.ack_action_to_payload(action)
         case
-          nuts.new_message(ack_reply, <<>>)
+          nuts.new_message(ack_reply, payload)
           |> nuts.publish(ctx.nats_server, _)
         {
           Ok(_) -> Ok(Nil)
@@ -169,4 +199,8 @@ fn ack_message(ctx: Context, message: nuts.NatsMessage) {
     }
     option.None -> Error(Nil)
   }
+}
+
+fn get_status(headers: List(#(String, String))) -> Result(String, Nil) {
+  list.key_find(headers, "Nats-Status")
 }
