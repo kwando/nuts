@@ -44,7 +44,7 @@ pub fn start(
           ctx:,
           self:,
           poll_ref:,
-          pending_messages: ctx.batch_size,
+          pending_messages: ctx.max_messages,
           handler:,
         ))
         |> actor.selecting(
@@ -70,15 +70,12 @@ fn handle_message(state: State, msg: Msg) {
       )
 
       state
-      |> make_poll_request()
+      |> make_poll_request(state.ctx.max_messages)
       |> actor.continue
     }
     NatsMsg(msg) -> {
       case state.ctx.inbox_name == msg.subject {
-        True -> {
-          string.inspect(msg) |> io.println
-          state
-        }
+        True -> state
         False -> {
           let assert Ok(delivery_info) =
             msg.reply_to
@@ -86,17 +83,17 @@ fn handle_message(state: State, msg: Msg) {
             |> result.try(jetstream.parse_ack)
 
           state.handler(msg, delivery_info)
-          case ack_message(state.ctx, msg) {
-            Ok(_) -> {
-              case state.pending_messages {
-                1 -> make_poll_request(state)
-                _ ->
-                  State(..state, pending_messages: state.pending_messages - 1)
-              }
+
+          let new_pending = state.pending_messages - 1
+          let _ = ack_message(state.ctx, msg)
+
+          case new_pending <= state.ctx.threshold_messages {
+            True -> {
+              let batch_size = state.ctx.max_messages - new_pending
+              make_poll_request(state, batch_size)
             }
-            Error(_) -> {
-              string.inspect(msg) |> io.println
-              state
+            False -> {
+              State(..state, pending_messages: new_pending)
             }
           }
         }
@@ -106,10 +103,10 @@ fn handle_message(state: State, msg: Msg) {
   }
 }
 
-fn make_poll_request(state: State) {
+fn make_poll_request(state: State, batch_size: Int) {
   let new_poll_ref = reference.new()
 
-  case new_poll(state.ctx) {
+  case new_poll(state.ctx, batch_size) {
     Ok(_) -> {
       process.send_after(
         state.self,
@@ -119,7 +116,7 @@ fn make_poll_request(state: State) {
       State(
         ..state,
         poll_ref: new_poll_ref,
-        pending_messages: state.ctx.batch_size,
+        pending_messages: state.ctx.max_messages,
       )
     }
     Error(_err) -> {
@@ -136,15 +133,16 @@ pub type Context {
     stream_name: String,
     consumer_name: String,
     nats_server: Subject(nuts.Message),
-    batch_size: Int,
+    max_messages: Int,
+    threshold_messages: Int,
     poll_expire: duration.Duration,
   )
 }
 
-fn new_poll(ctx: Context) {
+fn new_poll(ctx: Context, batch: Int) {
   nuts.new_message(
     "$JS.API.CONSUMER.MSG.NEXT." <> ctx.stream_name <> "." <> ctx.consumer_name,
-    jetstream.PullNextMessages(batch: ctx.batch_size, expires: ctx.poll_expire)
+    jetstream.PullNextMessages(batch:, expires: ctx.poll_expire)
       |> jetstream.consumer_request_to_json()
       |> json.to_string
       |> bit_array.from_string,

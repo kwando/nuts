@@ -35,7 +35,6 @@ pub fn main() {
   let stream_name = "nmea"
   let inbox_name = "my_inbox_" <> int.random(1_000_000_000) |> int.to_string
   let consumer_name = "nuts_example"
-  let batch_size = 100
   process.sleep(1000)
   let assert Ok(_) =
     stream_api.create_stream(
@@ -101,8 +100,9 @@ pub fn main() {
         stream_name:,
         consumer_name:,
         nats_server: subject,
-        batch_size:,
-        poll_expire: duration.seconds(2),
+        max_messages: 500,
+        threshold_messages: 250,
+        poll_expire: duration.seconds(30),
       ),
       fn(msg, info) {
         io.println(
