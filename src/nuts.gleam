@@ -1,6 +1,8 @@
 import gleam/bit_array
+import gleam/bool
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
+import gleam/erlang/reference.{type Reference}
 import gleam/int
 import gleam/io
 import gleam/json
@@ -26,6 +28,8 @@ pub opaque type Options {
     nkey_seed: Option(String),
     reconnect_interval: Int,
     logger: Logger,
+    ping_interval: Int,
+    ping_timeout: Int,
   )
 }
 
@@ -36,6 +40,8 @@ pub fn new(host: String, port: Int) -> Options {
     nkey_seed: None,
     reconnect_interval: 1000,
     logger: noop_logger(),
+    ping_interval: 300_000,
+    ping_timeout: 30_000,
   )
 }
 
@@ -45,6 +51,14 @@ pub fn nkey_seed(options: Options, string: String) -> Options {
 
 pub fn with_logger(options: Options, logger: Logger) {
   Options(..options, logger:)
+}
+
+pub fn with_ping_interval(options: Options, ms: Int) -> Options {
+  Options(..options, ping_interval: ms)
+}
+
+pub fn with_ping_timeout(options: Options, ms: Int) -> Options {
+  Options(..options, ping_timeout: ms)
 }
 
 pub type NatsMessage {
@@ -87,6 +101,8 @@ pub opaque type Message {
     reply: Subject(Result(NatsMessage, NatsError)),
   )
   RequestTimeout(inbox: String)
+  PingInterval(ping_ref: Reference)
+  PingTimeout(ping_ref: Reference)
 }
 
 type Subscriber {
@@ -173,6 +189,7 @@ type ClientState {
     connection_attempt: Int,
     request_map: Dict(String, Subject(Result(NatsMessage, NatsError))),
     inbox_prefix: String,
+    ping_ref: Option(Reference),
   )
 }
 
@@ -193,6 +210,7 @@ pub fn start(process_name: process.Name(Message), options: Options) {
       connection_attempt: 1,
       request_map: dict.new(),
       inbox_prefix: inbox.generate_prefix(),
+      ping_ref: None,
     ))
     |> actor.selecting(
       process.new_selector()
@@ -422,6 +440,41 @@ fn handle_message(
       }
       |> actor.continue()
     }
+    PingInterval(ping_ref) -> {
+      use <- bool.guard(
+        when: state.ping_ref != Some(ping_ref),
+        return: actor.continue(state),
+      )
+      case state.socket {
+        Some(_) -> {
+          case send_bits(state, command.ping()) {
+            Ok(_) -> {
+              process.send_after(
+                state.self,
+                state.options.ping_timeout,
+                PingTimeout(ping_ref),
+              )
+              actor.continue(state)
+            }
+            Error(_) ->
+              state
+              |> close_connection()
+              |> actor.continue()
+          }
+        }
+        None -> actor.continue(state)
+      }
+    }
+    PingTimeout(ping_ref) -> {
+      use <- bool.guard(
+        when: state.ping_ref != Some(ping_ref),
+        return: actor.continue(state),
+      )
+      state.logger.warning("ping timeout: server did not respond")
+      state
+      |> close_connection()
+      |> actor.continue()
+    }
   }
 }
 
@@ -453,6 +506,7 @@ fn close_connection(state: ClientState) {
         server_info: None,
         parser_config: protocol.default_parser_config(),
         connection_attempt: 1,
+        ping_ref: None,
       )
       |> setup_connection
     }
@@ -528,12 +582,19 @@ fn handle_server_message(
             )
           {
             Ok(_) -> {
+              let ping_ref = reference.new()
+              process.send_after(
+                state.self,
+                state.options.ping_interval,
+                PingInterval(ping_ref),
+              )
               ClientState(
                 ..state,
                 server_info: Some(server_info),
                 parser_config: ParserConfig(
                   max_payload: server_info.max_payload,
                 ),
+                ping_ref: Some(ping_ref),
               )
               |> resubscribe
             }
@@ -552,7 +613,15 @@ fn handle_server_message(
         Error(err) -> Error(err)
       }
     }
-    protocol.Pong -> Ok(state)
+    protocol.Pong -> {
+      let ping_ref = reference.new()
+      process.send_after(
+        state.self,
+        state.options.ping_interval,
+        PingInterval(ping_ref),
+      )
+      Ok(ClientState(..state, ping_ref: Some(ping_ref)))
+    }
     protocol.Msg(topic:, sid:, reply_to:, payload:) -> {
       broadcast_message(
         state,
