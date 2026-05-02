@@ -17,18 +17,22 @@ pub type ConsumerRequest {
   )
 }
 
-pub fn create_durable_consumer(
+pub fn create_consumer(
   stream stream_name: String,
-  durable_name name: String,
+  durable_name durable_name: Option(String),
+  deliver_policy deliver_policy: DeliverPolicy,
+  ack_policy ack_policy: AckPolicy,
+  inactive_threshold inactive_threshold: Option(duration.Duration),
 ) {
   CreateConsumer(
     stream_name:,
     config: ConsumerConfig(
-      deliver_policy: New,
-      ack_policy: AckExplicit,
+      deliver_policy:,
+      ack_policy:,
       replay_policy: Instant,
-      durable_name: option.Some(name),
+      durable_name:,
       description: option.None,
+      inactive_threshold:,
     ),
   )
 }
@@ -91,6 +95,7 @@ pub type ConsumerConfig {
     replay_policy: ReplayPolicy,
     durable_name: Option(String),
     description: Option(String),
+    inactive_threshold: Option(duration.Duration),
   )
 }
 
@@ -101,6 +106,7 @@ fn consumer_config_to_json(consumer_config: ConsumerConfig) -> json.Json {
     replay_policy:,
     durable_name:,
     description:,
+    inactive_threshold:,
   ) = consumer_config
   json.object(
     [
@@ -122,7 +128,10 @@ fn consumer_config_to_json(consumer_config: ConsumerConfig) -> json.Json {
       ..deliver_policy_to_properties(deliver_policy)
     ]
     |> optional("durable_name", durable_name, json.string)
-    |> optional("description", description, json.string),
+    |> optional("description", description, json.string)
+    |> optional("inactive_threshold", inactive_threshold, fn(d) {
+      json.int(duration.to_milliseconds(d) * 1_000_000)
+    }),
   )
 }
 

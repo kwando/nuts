@@ -19,7 +19,11 @@ pub fn cyan_logger(msg) {
   io.println_error(msg |> ansi.cyan)
 }
 
+@external(erlang, "observer", "start")
+fn start_observer() -> Nil
+
 pub fn main() {
+  start_observer()
   let nuts_name = process.new_name("nuts")
 
   let assert Ok(_) =
@@ -32,17 +36,18 @@ pub fn main() {
     |> nuts.start(nuts_name, _)
 
   let subject = process.named_subject(nuts_name)
-  let stream_name = "victron"
+  let stream_name = "nmea"
   let inbox_name = "my_inbox_" <> int.random(1_000_000_000) |> int.to_string
-  let consumer_name = "nuts_example"
+  let consumer_name = "nuts_example2"
+
   process.sleep(1000)
   let assert Ok(_) =
     stream_api.create_stream(
       subject,
       stream.StreamConfig(
         name: stream_name,
-        subjects: ["naboo.victron"],
-        retention: stream.Interest,
+        subjects: ["naboo.nmea"],
+        retention: stream.Limits,
         max_consumers: -1,
         max_msgs: -1,
         max_bytes: 1024 * 1024 * 64,
@@ -62,9 +67,12 @@ pub fn main() {
   let assert Ok(_) = stream_api.list_stream_names(subject)
 
   let create_consumer_json =
-    jetstream.create_durable_consumer(
+    jetstream.create_consumer(
       stream: stream_name,
-      durable_name: consumer_name,
+      durable_name: option.None,
+      deliver_policy: jetstream.All,
+      ack_policy: jetstream.AckExplicit,
+      inactive_threshold: option.Some(duration.seconds(30)),
     )
     |> jetstream.consumer_request_to_json
 
@@ -100,27 +108,33 @@ pub fn main() {
         stream_name:,
         consumer_name:,
         nats_server: subject,
-        max_messages: 500,
-        threshold_messages: 250,
+        max_messages: 1000,
+        threshold_messages: 500,
         poll_expire: duration.seconds(30),
         heartbeat: option.Some(duration.seconds(5)),
         no_wait: False,
+        logger: nuts.default_logger("stream_consumer"),
       ),
       fn(msg, info) {
-        io.println(
-          int.to_string(info.stream_seq)
-          <> " "
-          <> msg.subject |> ansi.cyan
-          <> " "
-          <> info.timestamp
-          |> timestamp.to_rfc3339(calendar.utc_offset)
-          |> ansi.green
-          <> " "
-          <> msg.payload |> bit_array.to_string |> result.unwrap("<<binary>>"),
-        )
+        log_message(info, msg)
         jetstream.Ack
       },
     )
 
   process.sleep_forever()
+}
+
+pub fn log_message(info: jetstream.DeliveryInfo, msg: nuts.NatsMessage) -> Nil {
+  io.println(
+    int.to_string(info.stream_seq)
+    <> " "
+    <> msg.subject |> ansi.cyan
+    <> " "
+    <> info.timestamp
+    |> timestamp.to_rfc3339(calendar.utc_offset)
+    |> ansi.green
+    <> " "
+    <> msg.payload |> bit_array.to_string |> result.unwrap("<<binary>>"),
+  )
+  Nil
 }
