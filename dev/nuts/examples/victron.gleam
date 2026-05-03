@@ -1,15 +1,15 @@
 import gleam/erlang/process
 import gleam/io
+import gleam/otp/actor
 import gleam/string
 import gleam_community/ansi
 import nuts
 
 pub fn main() {
-  let name = process.new_name("victron-nats")
-  let assert Ok(_started) = nuts.start(name, nuts.new("100.121.244.19", 4222))
-  let nats = process.named_subject(name)
+  let assert Ok(actor.Started(_, conn)) =
+    nuts.start(nuts.new("100.121.244.19", 4222))
 
-  let assert Ok(me) = nuts.subscribe(nats, "naboo.victron")
+  let assert Ok(me) = nuts.subscribe(conn, "naboo.victron")
 
   loop(me |> nuts.get_subject)
 }

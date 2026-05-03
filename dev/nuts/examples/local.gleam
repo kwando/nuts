@@ -1,13 +1,13 @@
 import gleam/erlang/process
 import gleam/io
+import gleam/otp/actor
 import gleam/string
 import gleam_community/ansi
 import nuts
 
 pub fn main() {
-  let name = process.new_name("local-nats")
-  let assert Ok(_started) = nuts.start(name, nuts.new("127.0.0.1", 4222))
-  let nats = process.named_subject(name)
+  let assert Ok(actor.Started(_, nats)) =
+    nuts.start(nuts.new("127.0.0.1", 4222))
 
   let assert Ok(me) = nuts.subscribe(nats, ">")
 

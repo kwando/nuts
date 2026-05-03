@@ -1,14 +1,12 @@
 import gleam/erlang/process.{type Subject}
 import gleam/option.{None, Some}
+import gleam/otp/actor
 import nuts as nats
 
 pub fn main() {
-  let name = process.new_name("")
-  let assert Ok(_started) =
+  let assert Ok(actor.Started(_, conn)) =
     nats.new("127.0.0.1", 4222)
-    |> nats.start(name, _)
-
-  let conn = process.named_subject(name)
+    |> nats.start
 
   let assert Ok(subscription) =
     conn

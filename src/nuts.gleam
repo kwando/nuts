@@ -27,6 +27,7 @@ pub opaque type Options {
     nkey_seed: Option(String),
     reconnect_interval: Int,
     logger: Logger,
+    name: Option(process.Name(Message)),
   )
 }
 
@@ -37,6 +38,7 @@ pub fn new(host: String, port: Int) -> Options {
     nkey_seed: None,
     reconnect_interval: 1000,
     logger: noop_logger(),
+    name: None,
   )
 }
 
@@ -46,6 +48,10 @@ pub fn nkey_seed(options: Options, string: String) -> Options {
 
 pub fn with_logger(options: Options, logger: Logger) {
   Options(..options, logger:)
+}
+
+pub fn with_name(options: Options, name: process.Name(Message)) -> Options {
+  Options(..options, name: Some(name))
 }
 
 pub type NatsMessage {
@@ -181,7 +187,7 @@ type ClientState {
   )
 }
 
-pub fn start(process_name: process.Name(Message), options: Options) {
+pub fn start(options: Options) {
   actor.new_with_initialiser(actor_timeout, fn(self) {
     actor.send(self, Connect)
 
@@ -204,18 +210,26 @@ pub fn start(process_name: process.Name(Message), options: Options) {
       |> process.select_monitors(SubscriberDown)
       |> mug.select_tcp_messages(SocketData),
     )
+    |> actor.returning(self)
     |> Ok
   })
-  |> actor.named(process_name)
+  |> apply_option(options.name, actor.named)
   |> actor.on_message(handle_message)
   |> actor.start
+}
+
+fn apply_option(input: b, option: Option(a), callback: fn(b, a) -> b) -> b {
+  case option {
+    Some(value) -> callback(input, value)
+    None -> input
+  }
 }
 
 pub fn supervised(
   name: process.Name(Message),
   options: Options,
-) -> supervision.ChildSpecification(Nil) {
-  supervision.worker(fn() { start(name, options) })
+) -> supervision.ChildSpecification(Subject(Message)) {
+  supervision.worker(fn() { start(options |> with_name(name)) })
 }
 
 pub fn from_url(url: String) {
