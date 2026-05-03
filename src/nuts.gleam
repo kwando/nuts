@@ -15,6 +15,9 @@ import nuts/connect_options.{ConnectOptions}
 import nuts/internal/command
 import nuts/internal/protocol.{type ServerInfo}
 
+@external(erlang, "nuts_ffi", "random_string")
+fn random_string(length: Int) -> String
+
 const actor_timeout = 5000
 
 pub opaque type Options {
@@ -61,6 +64,7 @@ pub type NatsError {
   AuthenticationFailed
   GenericError(String)
   BadURL
+  RequestTimedOut
 }
 
 pub opaque type Message {
@@ -595,6 +599,40 @@ pub fn unsubscribe(conn: Subject(Message), subscription: Subscription) {
 
 pub fn shutdown(conn: Subject(Message)) -> Nil {
   actor.call(conn, actor_timeout, Shutdown)
+}
+
+pub fn request(
+  conn: Subject(Message),
+  message: NatsMessage,
+  timeout: Int,
+) -> Result(NatsMessage, NatsError) {
+  let inbox = new_inbox()
+  case subscribe(conn, inbox) {
+    Ok(subscription) -> {
+      let message = NatsMessage(..message, reply_to: Some(inbox))
+      case publish(conn, message) {
+        Ok(Nil) -> {
+          let result = case
+            process.receive(get_subject(subscription), timeout)
+          {
+            Ok(reply) -> Ok(reply)
+            Error(Nil) -> Error(RequestTimedOut)
+          }
+          let _ = unsubscribe(conn, subscription)
+          result
+        }
+        Error(err) -> {
+          let _ = unsubscribe(conn, subscription)
+          Error(err)
+        }
+      }
+    }
+    Error(err) -> Error(err)
+  }
+}
+
+fn new_inbox() -> String {
+  "_INBOX." <> random_string(10)
 }
 
 // Logger

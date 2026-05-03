@@ -1,7 +1,7 @@
 import gleam/bit_array
 import gleam/erlang/process
 import gleam/int
-import gleam/option.{Some}
+import gleam/option.{None, Some}
 import nuts as nats
 import nuts/test_utils
 
@@ -112,8 +112,80 @@ pub fn reconnect_and_resubscribe_test() {
   }
 }
 
-pub fn main() {
-  let _ = integration_test()
-  let _ = bad_server_test()
-  let _ = reconnect_and_resubscribe_test()
+pub fn request_reply_test() {
+  use <- test_utils.with_nats_server_on_port(6789)
+  let options = nats.new("127.0.0.1", 6789)
+  let name = process.new_name("nats-test")
+  let nats_conn = process.named_subject(name)
+
+  let assert Ok(_) = nats.start(name, options)
+  assert test_utils.await_connected(nats_conn, 5)
+
+  let echo_ready = process.new_subject()
+  process.spawn_unlinked(fn() {
+    let assert Ok(service_sub) = nats.subscribe(nats_conn, "echo")
+    let service_subject = nats.get_subject(service_sub)
+    process.send(echo_ready, True)
+    echo_service(nats_conn, service_subject)
+  })
+
+  let assert Ok(True) = process.receive(echo_ready, 2000)
+    as "echo service did not start"
+
+  let assert Ok(reply) =
+    nats.new_message("echo", <<"hello world">>)
+    |> nats.request(nats_conn, _, 1000)
+    as "request should succeed"
+
+  assert reply.payload == <<"hello world">>
+  assert reply.reply_to == option.None
+}
+
+fn echo_service(
+  conn: process.Subject(nats.Message),
+  messages: process.Subject(nats.NatsMessage),
+) {
+  case process.receive(messages, 5000) {
+    Ok(msg) -> {
+      case msg.reply_to {
+        Some(inbox) -> {
+          let _ =
+            nats.new_message(inbox, msg.payload)
+            |> nats.publish(conn, _)
+          echo_service(conn, messages)
+        }
+        None -> echo_service(conn, messages)
+      }
+    }
+    Error(Nil) -> echo_service(conn, messages)
+  }
+}
+
+pub fn request_timeout_test() {
+  use port <- test_utils.with_nats_server()
+  let options = nats.new("127.0.0.1", port)
+  let name = process.new_name("nats-test")
+  let nats_conn = process.named_subject(name)
+
+  let assert Ok(_) = nats.start(name, options)
+  assert test_utils.await_connected(nats_conn, 5)
+
+  let assert Error(nats.RequestTimedOut) =
+    nats.new_message("no-one-is-here", <<"ping">>)
+    |> nats.request(nats_conn, _, 200)
+    as "request should time out"
+}
+
+pub fn request_not_connected_test() {
+  let name = process.new_name("test")
+  let assert Ok(_) =
+    nats.new("127.0.0.1", 47_921)
+    |> nats.start(name, _)
+
+  let conn = process.named_subject(name)
+
+  let assert Error(nats.NotConnected) =
+    nats.new_message("foo", <<"bar">>)
+    |> nats.request(conn, _, 200)
+    as "should not be connected"
 }
