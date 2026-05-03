@@ -76,6 +76,12 @@ pub opaque type Message {
     subscriber: Subject(NatsMessage),
     reply: Subject(Result(Subscription, NatsError)),
   )
+  Request(
+    message: NatsMessage,
+    reply_subject: Subject(Result(NatsMessage, NatsError)),
+    reply: Subject(Result(Nil, NatsError)),
+  )
+  RequestTimeout(inbox: String)
   SocketData(mug.TcpMessage)
   SubscriberDown(process.Down)
   Unsubscribe(Subscription, Subject(Result(Nil, NatsError)))
@@ -151,6 +157,12 @@ fn update_subscribers(
 }
 
 //------------------------------------------- NatsConnection -------------------------------------------
+type Responder {
+  Responder(
+    subject: Subject(Result(NatsMessage, NatsError)),
+    timeout_timer: process.Timer,
+  )
+}
 
 type ClientState {
   ClientState(
@@ -163,6 +175,8 @@ type ClientState {
     self: Subject(Message),
     logger: Logger,
     connection_attempt: Int,
+    inbox_prefix: String,
+    response_map: Dict(String, Responder),
   )
 }
 
@@ -180,6 +194,8 @@ pub fn start(process_name: process.Name(Message), options: Options) {
       self:,
       logger: options.logger,
       connection_attempt: 1,
+      response_map: dict.new(),
+      inbox_prefix: new_inbox_prefix(),
     ))
     |> actor.selecting(
       process.new_selector()
@@ -227,150 +243,221 @@ fn handle_message(
       actor.send(reply, state.socket != None && state.server_info != None)
       actor.continue(state)
     }
-    Publish(msg, reply) -> {
-      case state.socket {
-        Some(_) -> {
-          let bytes = case msg.headers {
-            [] -> command.encode_pub(msg.subject, msg.reply_to, msg.payload)
+    Publish(msg, reply) -> handle_publish(state, msg, reply)
+    SocketData(mug_message) -> handle_socket_data(mug_message, state)
+    Subscribe(subject:, subscriber:, reply:) ->
+      handle_subscribe(state, subscriber, subject, reply)
+    SubscriberDown(down) -> handle_subscriber_down(state, down)
+    Unsubscribe(subscription, reply) ->
+      handle_unsubscribe(state, subscription, reply)
+    Request(message:, reply_subject:, reply:) ->
+      handle_request(state, message, reply, reply_subject)
 
-            headers ->
-              command.encode_hpub(
-                msg.subject,
-                msg.reply_to,
-                headers,
-                msg.payload,
-              )
-          }
-
-          case send_bits(state, bytes) {
-            Ok(_) -> {
-              actor.send(reply, Ok(Nil))
-              actor.continue(state)
-            }
-            Error(error) -> {
-              actor.send(reply, Error(error))
-              state
-              |> close_connection()
-              |> actor.continue()
-            }
-          }
-        }
-        None -> {
-          actor.send(reply, Error(NotConnected))
-          actor.continue(state)
-        }
-      }
-    }
-    SocketData(mug_message) ->
-      case mug_message {
-        mug.Packet(socket, data) -> {
-          mug.receive_next_packet_as_message(socket)
-          let buffer = bit_array.append(state.buffer, data)
-          case parse_server_messages(state, buffer) {
-            Ok(state) -> actor.continue(state)
-            Error(err) -> {
-              state.logger.debug(
-                "parse_server_messages: " <> string.inspect(err),
-              )
-
-              state
-              |> close_connection
-              |> actor.continue
-            }
-          }
-        }
-        mug.SocketClosed(_) | mug.TcpError(_, _) -> {
-          state.logger.debug("socket closed")
-          state
-          |> close_connection
-          |> actor.continue
-        }
-      }
-    Subscribe(subject:, subscriber:, reply:) -> {
-      let sid = state.next_sid |> int.to_base36
-      case process.subject_owner(subscriber) {
-        Ok(pid) -> {
-          let monitor = process.monitor(pid)
-
-          let state = ClientState(..state, next_sid: state.next_sid + 1)
-          let subscriber =
-            Subscriber(sid:, monitor:, subject: subscriber, pattern: subject)
-          actor.send(reply, Ok(Subscription(subscriber:)))
-          let state =
-            state
-            |> update_subscribers(add_subscriber(_, subscriber))
-
-          case
-            send_bits(
-              state,
-              command.encode_sub(subject:, sid:, queue_group: None),
-            )
-          {
-            Ok(Nil) -> {
-              actor.continue(state)
-            }
-            Error(err) -> {
-              state.logger.warning(
-                "failed setup subscription on server: " <> string.inspect(err),
-              )
-              state
-              |> close_connection()
-              |> actor.continue
-            }
-          }
-        }
-        // the process is already dead, so no idea to setup a subscription
-        Error(Nil) -> {
-          actor.send(reply, Error(GenericError("subscriber is down")))
-          actor.continue(state)
-        }
-      }
-    }
-    SubscriberDown(down) -> {
-      case get_subscriber_by_monitor(state.subscribers, down.monitor) {
-        Ok(subscriber) -> {
-          let _ = send_bits(state, command.encode_unsub(subscriber.sid, None))
-
-          state
-          |> update_subscribers(remove_subscriber(_, subscriber))
-          |> actor.continue()
-        }
-        Error(_) -> actor.continue(state)
-      }
-    }
-    Unsubscribe(subscription, reply) -> {
-      case
-        get_subscriber_by_sid(state.subscribers, subscription.subscriber.sid)
-      {
-        Ok(subscriber) -> {
-          case send_bits(state, command.encode_unsub(subscriber.sid, None)) {
-            Ok(_) | Error(NotConnected) -> {
-              actor.send(reply, Ok(Nil))
-              actor.continue(
-                state
-                |> update_subscribers(remove_subscriber(_, subscriber)),
-              )
-            }
-            Error(_) -> {
-              actor.send(reply, Error(GenericError("subscriber not found")))
-              actor.continue(
-                close_connection(state)
-                |> update_subscribers(remove_subscriber(_, subscriber)),
-              )
-            }
-          }
-        }
-        Error(_) -> {
-          actor.send(reply, Ok(Nil))
-          actor.continue(state)
-        }
-      }
-    }
+    RequestTimeout(inbox) -> handle_request_timeout(state, inbox)
     Shutdown(reply) -> {
       actor.send(reply, Nil)
       actor.stop()
     }
   }
+}
+
+// ---------------- Handler functions ------------------
+fn handle_socket_data(
+  mug_message: mug.TcpMessage,
+  state: ClientState,
+) -> actor.Next(ClientState, a) {
+  case mug_message {
+    mug.Packet(socket, data) -> {
+      mug.receive_next_packet_as_message(socket)
+      let buffer = bit_array.append(state.buffer, data)
+      case parse_server_messages(state, buffer) {
+        Ok(state) -> actor.continue(state)
+        Error(err) -> {
+          state.logger.debug("parse_server_messages: " <> string.inspect(err))
+
+          state
+          |> close_connection
+          |> actor.continue
+        }
+      }
+    }
+    mug.SocketClosed(_) | mug.TcpError(_, _) -> {
+      state.logger.debug("socket closed")
+      state
+      |> close_connection
+      |> actor.continue
+    }
+  }
+}
+
+fn handle_unsubscribe(
+  state: ClientState,
+  subscription: Subscription,
+  reply: Subject(Result(Nil, NatsError)),
+) -> actor.Next(ClientState, a) {
+  case get_subscriber_by_sid(state.subscribers, subscription.subscriber.sid) {
+    Ok(subscriber) -> {
+      case send_bits(state, command.encode_unsub(subscriber.sid, None)) {
+        Ok(_) | Error(NotConnected) -> {
+          actor.send(reply, Ok(Nil))
+          actor.continue(
+            state
+            |> update_subscribers(remove_subscriber(_, subscriber)),
+          )
+        }
+        Error(_) -> {
+          actor.send(reply, Error(GenericError("subscriber not found")))
+          actor.continue(
+            close_connection(state)
+            |> update_subscribers(remove_subscriber(_, subscriber)),
+          )
+        }
+      }
+    }
+    Error(_) -> {
+      actor.send(reply, Ok(Nil))
+      actor.continue(state)
+    }
+  }
+}
+
+fn handle_subscriber_down(
+  state: ClientState,
+  down: process.Down,
+) -> actor.Next(ClientState, a) {
+  case get_subscriber_by_monitor(state.subscribers, down.monitor) {
+    Ok(subscriber) -> {
+      let _ = send_bits(state, command.encode_unsub(subscriber.sid, None))
+
+      state
+      |> update_subscribers(remove_subscriber(_, subscriber))
+      |> actor.continue()
+    }
+    Error(_) -> actor.continue(state)
+  }
+}
+
+fn handle_subscribe(
+  state: ClientState,
+  subscriber: Subject(NatsMessage),
+  subject: String,
+  reply: Subject(Result(Subscription, NatsError)),
+) -> actor.Next(ClientState, a) {
+  let sid = state.next_sid |> int.to_base36
+  case process.subject_owner(subscriber) {
+    Ok(pid) -> {
+      let monitor = process.monitor(pid)
+
+      let state = ClientState(..state, next_sid: state.next_sid + 1)
+      let subscriber =
+        Subscriber(sid:, monitor:, subject: subscriber, pattern: subject)
+      actor.send(reply, Ok(Subscription(subscriber:)))
+      let state =
+        state
+        |> update_subscribers(add_subscriber(_, subscriber))
+
+      case
+        send_bits(state, command.encode_sub(subject:, sid:, queue_group: None))
+      {
+        Ok(Nil) -> {
+          actor.continue(state)
+        }
+        Error(err) -> {
+          state.logger.warning(
+            "failed setup subscription on server: " <> string.inspect(err),
+          )
+          state
+          |> close_connection()
+          |> actor.continue
+        }
+      }
+    }
+    // the process is already dead, so no idea to setup a subscription
+    Error(Nil) -> {
+      actor.send(reply, Error(GenericError("subscriber is down")))
+      actor.continue(state)
+    }
+  }
+}
+
+fn handle_publish(
+  state: ClientState,
+  msg: NatsMessage,
+  reply: Subject(Result(Nil, NatsError)),
+) -> actor.Next(ClientState, a) {
+  case state.socket {
+    Some(_) -> {
+      let bytes = case msg.headers {
+        [] -> command.encode_pub(msg.subject, msg.reply_to, msg.payload)
+
+        headers ->
+          command.encode_hpub(msg.subject, msg.reply_to, headers, msg.payload)
+      }
+
+      case send_bits(state, bytes) {
+        Ok(_) -> {
+          actor.send(reply, Ok(Nil))
+          actor.continue(state)
+        }
+        Error(error) -> {
+          actor.send(reply, Error(error))
+          state
+          |> close_connection()
+          |> actor.continue()
+        }
+      }
+    }
+    None -> {
+      actor.send(reply, Error(NotConnected))
+      actor.continue(state)
+    }
+  }
+}
+
+fn handle_request(
+  state: ClientState,
+  message: NatsMessage,
+  reply: Subject(Result(Nil, NatsError)),
+  reply_subject: Subject(Result(NatsMessage, NatsError)),
+) -> actor.Next(ClientState, a) {
+  let inbox = new_inbox_from_prefix(state.inbox_prefix)
+
+  let cmd =
+    command.encode_pub(
+      subject: message.subject,
+      reply_to: Some(inbox),
+      payload: message.payload,
+    )
+
+  case send_bits(state, cmd) {
+    Ok(_) -> {
+      actor.send(reply, Ok(Nil))
+      let timeout_timer =
+        process.send_after(state.self, 5000, RequestTimeout(inbox))
+
+      update_response_map(state, dict.insert(
+        _,
+        inbox,
+        Responder(subject: reply_subject, timeout_timer:),
+      ))
+      |> actor.continue
+    }
+    Error(err) -> {
+      actor.send(reply, Error(err))
+      actor.continue(state)
+    }
+  }
+}
+
+fn handle_request_timeout(
+  state: ClientState,
+  inbox: String,
+) -> actor.Next(ClientState, a) {
+  let assert Ok(responder) = state.response_map |> dict.get(inbox)
+  process.send(responder.subject, Error(RequestTimedOut))
+
+  update_response_map(state, dict.delete(_, inbox))
+  |> actor.continue
 }
 
 fn close_connection(state: ClientState) {
@@ -496,9 +583,15 @@ fn handle_server_message(
 
 fn resubscribe(state: ClientState) -> Result(ClientState, NatsError) {
   let subscribers = state.subscribers.sids |> dict.values
+  let request_responder =
+    command.encode_sub(
+      subject: state.inbox_prefix <> "*",
+      sid: "0",
+      queue_group: None,
+    )
 
   let command =
-    list.fold(subscribers, <<>>, fn(acc, subscriber) {
+    list.fold(subscribers, request_responder, fn(acc, subscriber) {
       bit_array.append(
         acc,
         command.encode_sub(
@@ -521,16 +614,33 @@ fn broadcast_message(
   state: ClientState,
   sid: String,
   nats_message: NatsMessage,
-) {
-  case get_subscriber_by_sid(state.subscribers, sid) {
-    Ok(subscriber) -> {
-      actor.send(subscriber.subject, nats_message)
-      Ok(state)
-    }
+) -> Result(ClientState, a) {
+  case state.response_map |> dict.get(nats_message.subject) {
+    Ok(responder) -> {
+      case process.cancel_timer(responder.timeout_timer) {
+        process.TimerNotFound -> Nil
+        process.Cancelled(..) ->
+          process.send(responder.subject, Ok(nats_message))
+      }
 
-    Error(Nil) -> {
-      state.logger.warning("message received but but no subscription found")
-      Ok(state)
+      ClientState(
+        ..state,
+        response_map: dict.delete(state.response_map, nats_message.subject),
+      )
+      |> Ok
+    }
+    Error(_) -> {
+      case get_subscriber_by_sid(state.subscribers, sid) {
+        Ok(subscriber) -> {
+          actor.send(subscriber.subject, nats_message)
+          Ok(state)
+        }
+
+        Error(Nil) -> {
+          state.logger.warning("message received but but no subscription found")
+          Ok(state)
+        }
+      }
     }
   }
 }
@@ -614,33 +724,27 @@ pub fn request(
   message: NatsMessage,
   timeout: Int,
 ) -> Result(NatsMessage, NatsError) {
-  let inbox = new_inbox()
-  case subscribe(conn, inbox) {
-    Ok(subscription) -> {
-      let message = NatsMessage(..message, reply_to: Some(inbox))
-      case publish(conn, message) {
-        Ok(Nil) -> {
-          let result = case
-            process.receive(get_subject(subscription), timeout)
-          {
-            Ok(reply) -> Ok(reply)
-            Error(Nil) -> Error(RequestTimedOut)
-          }
-          let _ = unsubscribe(conn, subscription)
-          result
-        }
-        Error(err) -> {
-          let _ = unsubscribe(conn, subscription)
-          Error(err)
-        }
+  let reply_subject = process.new_subject()
+  case actor.call(conn, 5000, Request(message:, reply_subject:, reply: _)) {
+    Ok(_) ->
+      case process.receive(reply_subject, timeout) {
+        Ok(result) -> result
+        Error(_) -> Error(RequestTimedOut)
       }
-    }
     Error(err) -> Error(err)
   }
 }
 
-fn new_inbox() -> String {
-  "_INBOX." <> random_string(10)
+fn update_response_map(state: ClientState, callback) {
+  ClientState(..state, response_map: callback(state.response_map))
+}
+
+fn new_inbox_prefix() -> String {
+  "_INBOX." <> random_string(10) <> "."
+}
+
+fn new_inbox_from_prefix(prefix: String) -> String {
+  prefix <> random_string(10)
 }
 
 // Logger

@@ -122,7 +122,7 @@ pub fn request_reply_test() {
   assert test_utils.await_connected(nats_conn, 5)
 
   let echo_ready = process.new_subject()
-  process.spawn_unlinked(fn() {
+  process.spawn(fn() {
     let assert Ok(service_sub) = nats.subscribe(nats_conn, "echo")
     let service_subject = nats.get_subject(service_sub)
     process.send(echo_ready, True)
