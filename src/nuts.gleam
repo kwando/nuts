@@ -79,6 +79,7 @@ pub opaque type Message {
   Request(
     message: NatsMessage,
     reply_subject: Subject(Result(NatsMessage, NatsError)),
+    timeout: Int,
     reply: Subject(Result(Nil, NatsError)),
   )
   RequestTimeout(inbox: String)
@@ -250,8 +251,8 @@ fn handle_message(
     SubscriberDown(down) -> handle_subscriber_down(state, down)
     Unsubscribe(subscription, reply) ->
       handle_unsubscribe(state, subscription, reply)
-    Request(message:, reply_subject:, reply:) ->
-      handle_request(state, message, reply, reply_subject)
+    Request(message:, reply_subject:, reply:, timeout:) ->
+      handle_request(state, message, reply, reply_subject, timeout)
 
     RequestTimeout(inbox) -> handle_request_timeout(state, inbox)
     Shutdown(reply) -> {
@@ -387,13 +388,7 @@ fn handle_publish(
 ) -> actor.Next(ClientState, a) {
   case state.socket {
     Some(_) -> {
-      let bytes = case msg.headers {
-        [] -> command.encode_pub(msg.subject, msg.reply_to, msg.payload)
-
-        headers ->
-          command.encode_hpub(msg.subject, msg.reply_to, headers, msg.payload)
-      }
-
+      let bytes = encode_message(msg)
       case send_bits(state, bytes) {
         Ok(_) -> {
           actor.send(reply, Ok(Nil))
@@ -419,21 +414,16 @@ fn handle_request(
   message: NatsMessage,
   reply: Subject(Result(Nil, NatsError)),
   reply_subject: Subject(Result(NatsMessage, NatsError)),
+  timeout: Int,
 ) -> actor.Next(ClientState, a) {
   let inbox = new_inbox_from_prefix(state.inbox_prefix)
+  let bytes = encode_message(NatsMessage(..message, reply_to: Some(inbox)))
 
-  let cmd =
-    command.encode_pub(
-      subject: message.subject,
-      reply_to: Some(inbox),
-      payload: message.payload,
-    )
-
-  case send_bits(state, cmd) {
+  case send_bits(state, bytes) {
     Ok(_) -> {
       actor.send(reply, Ok(Nil))
       let timeout_timer =
-        process.send_after(state.self, 5000, RequestTimeout(inbox))
+        process.send_after(state.self, timeout, RequestTimeout(inbox))
 
       update_response_map(state, dict.insert(
         _,
@@ -453,11 +443,29 @@ fn handle_request_timeout(
   state: ClientState,
   inbox: String,
 ) -> actor.Next(ClientState, a) {
-  let assert Ok(responder) = state.response_map |> dict.get(inbox)
-  process.send(responder.subject, Error(RequestTimedOut))
-
-  update_response_map(state, dict.delete(_, inbox))
+  case dict.get(state.response_map, inbox) {
+    Ok(responder) -> {
+      assert process.cancel_timer(responder.timeout_timer)
+        == process.TimerNotFound
+        as "this message should have come from the responder"
+      process.send(responder.subject, Error(RequestTimedOut))
+      update_response_map(state, dict.delete(_, inbox))
+    }
+    // We got a timeout for a response which we have already responded to. This can happen if the
+    // response is received after the timeout has already expired.
+    Error(_) -> state
+  }
   |> actor.continue
+}
+
+/// Convert a NatsMessage to a BitArray for sending over the socket.∏
+fn encode_message(msg: NatsMessage) -> BitArray {
+  case msg.headers {
+    [] -> command.encode_pub(msg.subject, msg.reply_to, msg.payload)
+
+    headers ->
+      command.encode_hpub(msg.subject, msg.reply_to, headers, msg.payload)
+  }
 }
 
 fn close_connection(state: ClientState) {
@@ -725,7 +733,9 @@ pub fn request(
   timeout: Int,
 ) -> Result(NatsMessage, NatsError) {
   let reply_subject = process.new_subject()
-  case actor.call(conn, 5000, Request(message:, reply_subject:, reply: _)) {
+  case
+    actor.call(conn, 5000, Request(message:, timeout:, reply_subject:, reply: _))
+  {
     Ok(_) ->
       case process.receive(reply_subject, timeout) {
         Ok(result) -> result
@@ -744,7 +754,7 @@ fn new_inbox_prefix() -> String {
 }
 
 fn new_inbox_from_prefix(prefix: String) -> String {
-  prefix <> random_string(10)
+  prefix <> random_string(5)
 }
 
 // Logger
