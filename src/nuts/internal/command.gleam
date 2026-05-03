@@ -4,15 +4,15 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import nuts/connect_options.{type ConnectOptions}
 
-pub fn ping() {
+pub fn encode_ping() {
   <<"PING\r\n">>
 }
 
-pub fn pong() {
+pub fn encode_pong() {
   <<"PONG\r\n">>
 }
 
-pub fn sub(
+pub fn encode_sub(
   subject topic: String,
   sid sid: String,
   queue_group queue_group: Option(String),
@@ -31,7 +31,7 @@ pub fn sub(
   }
 }
 
-pub fn pub_(
+pub fn encode_pub(
   subject topic: String,
   reply_to reply_to: Option(String),
   payload payload: BitArray,
@@ -51,7 +51,7 @@ pub fn pub_(
   >>
 }
 
-pub fn hpub(
+pub fn encode_hpub(
   subject sub: String,
   reply_to reply_to: Option(String),
   headers headers: List(#(String, String)),
@@ -80,12 +80,12 @@ pub fn hpub(
   >>
 }
 
-pub fn connect(data: ConnectOptions) {
+pub fn encode_connect(data: ConnectOptions) {
   <<"CONNECT ", connect_options.to_json_string(data):utf8, "\r\n">>
 }
 
-pub fn unsub(sid: String, max_age: Option(Int)) {
-  case max_age {
+pub fn encode_unsub(sid: String, max_msgs: Option(Int)) {
+  case max_msgs {
     None -> <<"UNSUB ", sid:utf8, "\r\n">>
     Some(max_age) -> <<
       "UNSUB ",

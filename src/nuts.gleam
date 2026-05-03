@@ -231,10 +231,15 @@ fn handle_message(
       case state.socket {
         Some(_) -> {
           let bytes = case msg.headers {
-            [] -> command.pub_(msg.subject, msg.reply_to, msg.payload)
+            [] -> command.encode_pub(msg.subject, msg.reply_to, msg.payload)
 
             headers ->
-              command.hpub(msg.subject, msg.reply_to, headers, msg.payload)
+              command.encode_hpub(
+                msg.subject,
+                msg.reply_to,
+                headers,
+                msg.payload,
+              )
           }
 
           case send_bits(state, bytes) {
@@ -296,7 +301,10 @@ fn handle_message(
             |> update_subscribers(add_subscriber(_, subscriber))
 
           case
-            send_bits(state, command.sub(subject:, sid:, queue_group: None))
+            send_bits(
+              state,
+              command.encode_sub(subject:, sid:, queue_group: None),
+            )
           {
             Ok(Nil) -> {
               actor.continue(state)
@@ -321,7 +329,7 @@ fn handle_message(
     SubscriberDown(down) -> {
       case get_subscriber_by_monitor(state.subscribers, down.monitor) {
         Ok(subscriber) -> {
-          let _ = send_bits(state, command.unsub(subscriber.sid, None))
+          let _ = send_bits(state, command.encode_unsub(subscriber.sid, None))
 
           state
           |> update_subscribers(remove_subscriber(_, subscriber))
@@ -335,7 +343,7 @@ fn handle_message(
         get_subscriber_by_sid(state.subscribers, subscription.subscriber.sid)
       {
         Ok(subscriber) -> {
-          case send_bits(state, command.unsub(subscriber.sid, None)) {
+          case send_bits(state, command.encode_unsub(subscriber.sid, None)) {
             Ok(_) | Error(NotConnected) -> {
               actor.send(reply, Ok(Nil))
               actor.continue(
@@ -433,7 +441,7 @@ fn handle_server_message(
           case
             send_bits(
               state,
-              command.connect(ConnectOptions(
+              command.encode_connect(ConnectOptions(
                 verbose: False,
                 pedantic: True,
                 tls_required: False,
@@ -461,7 +469,7 @@ fn handle_server_message(
       }
     }
     protocol.Ping -> {
-      case send_bits(state, command.pong()) {
+      case send_bits(state, command.encode_pong()) {
         Ok(_) -> Ok(state)
         Error(err) -> Error(err)
       }
@@ -493,7 +501,7 @@ fn resubscribe(state: ClientState) -> Result(ClientState, NatsError) {
     list.fold(subscribers, <<>>, fn(acc, subscriber) {
       bit_array.append(
         acc,
-        command.sub(
+        command.encode_sub(
           subject: subscriber.pattern,
           sid: subscriber.sid,
           queue_group: None,
