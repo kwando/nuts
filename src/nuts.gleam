@@ -248,11 +248,16 @@ fn handle_message(
   state: ClientState,
   msg: Message,
 ) -> actor.Next(ClientState, a) {
+  echo #(msg, state.socket)
   case msg {
     Connect -> {
-      state
-      |> setup_connection
-      |> actor.continue
+      case state.socket {
+        Some(_) -> panic as "ALREADY CONNECTED"
+        None ->
+          state
+          |> setup_connection
+          |> actor.continue
+      }
     }
     IsConnected(reply) -> {
       actor.send(reply, state.socket != None && state.server_info != None)
@@ -281,6 +286,7 @@ fn handle_socket_data(
   mug_message: mug.TcpMessage,
   state: ClientState,
 ) -> actor.Next(ClientState, a) {
+  state.logger.debug("handle_socket_data: " <> string.inspect(mug_message))
   case mug_message {
     mug.Packet(socket, data) -> {
       mug.receive_next_packet_as_message(socket)
@@ -551,7 +557,7 @@ fn handle_server_message(
             send_bits(
               state,
               command.encode_connect(ConnectOptions(
-                verbose: False,
+                verbose: True,
                 pedantic: True,
                 tls_required: False,
                 lang: "gleam",
@@ -627,7 +633,8 @@ fn resubscribe(state: ClientState) -> Result(ClientState, NatsError) {
   case command {
     <<>> -> Ok(state)
     command ->
-      send_bits(state, command)
+      state
+      |> send_bits(command)
       |> result.replace(state)
   }
 }
@@ -672,6 +679,7 @@ fn setup_connection(state: ClientState) {
     "setup connection " <> int.to_string(state.connection_attempt),
   )
   assert state.socket == None as "cant reconnect when there is an open socket"
+  process.sleep(1000)
 
   let socket =
     mug.new(state.options.host, state.options.port)

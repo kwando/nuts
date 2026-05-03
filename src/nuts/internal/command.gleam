@@ -23,9 +23,9 @@ pub fn encode_sub(
       "SUB ",
       topic:utf8,
       " ",
-      sid:utf8,
-      " ",
       queue_group:utf8,
+      " ",
+      sid:utf8,
       "\r\n",
     >>
   }
