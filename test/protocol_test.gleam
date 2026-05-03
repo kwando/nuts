@@ -1,6 +1,6 @@
 import gleam/option.{None, Some}
 import gleeunit/should
-import nuts/internal/protocol.{Continue, NeedsMoreData}
+import nuts/internal/protocol.{Continue, Hmsg, NeedsMoreData}
 
 pub fn parse_test() {
   protocol.parse(<<"PING\r\n">>)
@@ -74,4 +74,61 @@ pub fn parse_message_with_headers_test() {
       <<>>,
     ),
   )
+}
+
+pub fn parse_hmsg_with_status_code_test() {
+  let assert Continue(
+    Hmsg(
+      topic: "consumer6JE8",
+      headers: _,
+      sid: "1",
+      reply_to: None,
+      payload: _,
+    ),
+    <<>>,
+  ) =
+    protocol.parse(<<
+      "HMSG consumer6JE8 1 33 33\r\nNATS/1.0 409 Consumer Deleted\r\n\r\n\r\n",
+    >>)
+
+  let assert Continue(
+    Hmsg(
+      topic: "inbox",
+      headers: headers,
+      sid: "1",
+      reply_to: Some("reply"),
+      payload: <<>>,
+    ),
+    <<>>,
+  ) =
+    protocol.parse(<<
+      "HMSG inbox 1 reply 28 28\r\nNATS/1.0 408 No Messages\r\n\r\n\r\n",
+    >>)
+
+  should.equal(headers, [
+    #("Status", "408"),
+    #("Description", "No Messages"),
+  ])
+}
+
+pub fn parse_hmsg_status_with_headers_test() {
+  let assert Continue(
+    Hmsg(
+      topic: "inbox",
+      headers: headers,
+      sid: "1",
+      reply_to: Some("reply"),
+      payload: <<"hello">>,
+    ),
+    <<>>,
+  ) =
+    protocol.parse(<<
+      "HMSG inbox 1 reply 43 48\r\nNATS/1.0 408 No Messages\r\nCustom: value\r\n\r\nhello\r\n",
+    >>)
+
+  should.equal(headers, [
+    #("Status", "408"),
+    #("Description", "No Messages"),
+    #("Custom", "value"),
+  ])
 }

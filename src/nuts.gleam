@@ -71,6 +71,7 @@ pub type NatsError {
   GenericError(String)
   BadURL
   RequestTimedOut
+  NoResponders
 }
 
 pub opaque type Message {
@@ -289,24 +290,36 @@ fn handle_socket_data(
   state.logger.debug("handle_socket_data: " <> string.inspect(mug_message))
   case mug_message {
     mug.Packet(socket, data) -> {
-      mug.receive_next_packet_as_message(socket)
-      let buffer = bit_array.append(state.buffer, data)
-      case parse_server_messages(state, buffer) {
-        Ok(state) -> actor.continue(state)
-        Error(err) -> {
-          state.logger.debug("parse_server_messages: " <> string.inspect(err))
+      case state.socket {
+        Some(current) if current == socket -> {
+          mug.receive_next_packet_as_message(socket)
+          let buffer = bit_array.append(state.buffer, data)
+          case parse_server_messages(state, buffer) {
+            Ok(state) -> actor.continue(state)
+            Error(err) -> {
+              state.logger.debug(
+                "parse_server_messages: " <> string.inspect(err),
+              )
 
+              state
+              |> close_connection
+              |> actor.continue
+            }
+          }
+        }
+        _ -> actor.continue(state)
+      }
+    }
+    mug.SocketClosed(socket) | mug.TcpError(socket, _) -> {
+      case state.socket {
+        Some(current) if current == socket -> {
+          state.logger.debug("socket closed")
           state
           |> close_connection
           |> actor.continue
         }
+        _ -> actor.continue(state)
       }
-    }
-    mug.SocketClosed(_) | mug.TcpError(_, _) -> {
-      state.logger.debug("socket closed")
-      state
-      |> close_connection
-      |> actor.continue
     }
   }
 }
@@ -646,10 +659,13 @@ fn broadcast_message(
 ) -> Result(ClientState, a) {
   case state.response_map |> dict.get(nats_message.subject) {
     Ok(responder) -> {
+      let response = case get_status(nats_message.headers) {
+        Some("503") -> Error(NoResponders)
+        _ -> Ok(nats_message)
+      }
       case process.cancel_timer(responder.timeout_timer) {
         process.TimerNotFound -> Nil
-        process.Cancelled(..) ->
-          process.send(responder.subject, Ok(nats_message))
+        process.Cancelled(..) -> process.send(responder.subject, response)
       }
 
       ClientState(
@@ -674,12 +690,20 @@ fn broadcast_message(
   }
 }
 
+fn get_status(headers: List(#(String, String))) -> Option(String) {
+  case headers {
+    [] -> None
+    [#("Status", status), ..] -> Some(status)
+    [_, ..rest] -> get_status(rest)
+  }
+}
+
 fn setup_connection(state: ClientState) {
   state.logger.debug(
     "setup connection " <> int.to_string(state.connection_attempt),
   )
   assert state.socket == None as "cant reconnect when there is an open socket"
-  process.sleep(1000)
+  process.sleep(200)
 
   let socket =
     mug.new(state.options.host, state.options.port)

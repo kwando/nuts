@@ -158,10 +158,10 @@ pub fn request_timeout_test() {
   let assert Ok(Started(_, nats_conn)) = nats.start(options)
   assert test_utils.await_connected(nats_conn, 5)
 
-  let assert Error(nats.RequestTimedOut) =
+  let assert Error(nats.NoResponders) =
     nats.new_message("no-one-is-here", <<"ping">>)
     |> nats.request(nats_conn, _, 200)
-    as "request should time out"
+    as "request should return no responders"
 }
 
 pub fn request_not_connected_test() {

@@ -209,22 +209,45 @@ fn with_int(
 }
 
 fn parse_headers(headers: BitArray) {
-  case headers {
-    <<"NATS/1.0\r\n", data:bits>> -> {
-      let assert Ok(data) = bit_array.to_string(data)
-
-      data
-      |> string.trim
-      |> string.split("\r\n")
-      |> list.try_map(fn(line) {
-        case string.split_once(line, ":") {
-          Error(_) -> Error(Nil)
-          Ok(#(key, value)) -> Ok(#(key, string.trim(value)))
-        }
-      })
+  case bit_array.to_string(headers) {
+    Ok(headers_string) -> {
+      let lines = string.split(headers_string, "\r\n")
+      case lines {
+        ["NATS/1.0", ..rest] -> parse_header_lines(rest)
+        ["NATS/1.0 " <> status, ..rest] ->
+          case parse_header_lines(rest) {
+            Ok(header_lines) ->
+              Ok(list.append(status_headers(status), header_lines))
+            Error(Nil) -> Error(Nil)
+          }
+        _ -> Error(Nil)
+      }
     }
-    _ -> Error(Nil)
+    Error(_) -> Error(Nil)
   }
+}
+
+fn status_headers(status: String) -> List(#(String, String)) {
+  case string.split_once(status, " ") {
+    Ok(#(code, description)) -> [
+      #("Status", code),
+      #("Description", string.trim(description)),
+    ]
+    Error(_) -> [#("Status", string.trim(status))]
+  }
+}
+
+fn parse_header_lines(
+  lines: List(String),
+) -> Result(List(#(String, String)), Nil) {
+  lines
+  |> list.filter(fn(line) { line != "" })
+  |> list.try_map(fn(line) {
+    case string.split_once(line, ":") {
+      Error(_) -> Error(Nil)
+      Ok(#(key, value)) -> Ok(#(key, string.trim(value)))
+    }
+  })
 }
 
 /// Reads all bytes until it finds a CRLF
