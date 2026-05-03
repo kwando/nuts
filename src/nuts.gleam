@@ -734,10 +734,15 @@ pub fn request(
 ) -> Result(NatsMessage, NatsError) {
   let reply_subject = process.new_subject()
   case
-    actor.call(conn, 5000, Request(message:, timeout:, reply_subject:, reply: _))
+    actor.call(conn, actor_timeout, Request(
+      message:,
+      timeout:,
+      reply_subject:,
+      reply: _,
+    ))
   {
     Ok(_) ->
-      case process.receive(reply_subject, timeout) {
+      case process.receive(reply_subject, timeout + actor_timeout) {
         Ok(result) -> result
         Error(_) -> Error(RequestTimedOut)
       }
