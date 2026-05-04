@@ -57,10 +57,16 @@ pub fn consumer_test() {
       consumer_name:,
       config: jetstream_api.ConsumerConfig(
         description: None,
+        durable: True,
         deliver_policy: jetstream_api.All,
         ack_policy: jetstream_api.AckExplicit,
-        replay_policy: jetstream_api.Instant,
+        ack_wait: None,
         max_deliver: 10,
+        max_ack_pending: None,
+        max_waiting: None,
+        backoff: None,
+        inactive_threshold: None,
+        replay_policy: jetstream_api.Instant,
       ),
     )
 

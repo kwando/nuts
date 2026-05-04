@@ -2,6 +2,7 @@ import gleam/bit_array
 import gleam/dynamic/decode.{type Decoder}
 import gleam/int
 import gleam/json
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
@@ -277,10 +278,32 @@ fn replay_policy_to_json(replay_policy: ReplayPolicy) -> json.Json {
 pub type ConsumerConfig {
   ConsumerConfig(
     description: Option(String),
+    durable: Bool,
     deliver_policy: DeliverPolicy,
     ack_policy: AckPolicy,
-    replay_policy: ReplayPolicy,
+    ack_wait: Option(Duration),
     max_deliver: Int,
+    max_ack_pending: Option(Int),
+    max_waiting: Option(Int),
+    backoff: Option(List(Duration)),
+    inactive_threshold: Option(Duration),
+    replay_policy: ReplayPolicy,
+  )
+}
+
+pub fn default_consumer_config() -> ConsumerConfig {
+  ConsumerConfig(
+    description: None,
+    durable: False,
+    deliver_policy: All,
+    ack_policy: AckExplicit,
+    ack_wait: None,
+    max_deliver: -1,
+    max_ack_pending: None,
+    max_waiting: None,
+    backoff: None,
+    inactive_threshold: None,
+    replay_policy: Instant,
   )
 }
 
@@ -289,8 +312,13 @@ pub fn consumer_create_request(
   consumer_name consumer_name: String,
   config config: ConsumerConfig,
 ) -> nuts.NatsMessage {
+  let subject = "$JS.API.CONSUMER.CREATE." <> stream <> "." <> consumer_name
+  let durable_field = case config.durable {
+    True -> [#("durable_name", json.string(consumer_name))]
+    False -> []
+  }
   nuts.NatsMessage(
-    subject: "$JS.API.CONSUMER.CREATE." <> stream <> "." <> consumer_name,
+    subject:,
     reply_to: None,
     headers: [],
     payload: json_payload(
@@ -299,13 +327,31 @@ pub fn consumer_create_request(
         #(
           "config",
           json.object(
-            [
+            list.append(
+              durable_field,
+              deliver_policy_to_json(config.deliver_policy),
+            )
+            |> list.append([
               #("ack_policy", ack_policy_to_json(config.ack_policy)),
               #("replay_policy", replay_policy_to_json(config.replay_policy)),
               #("max_deliver", json.int(config.max_deliver)),
-              ..deliver_policy_to_json(config.deliver_policy)
-            ]
-            |> optional_field("description", config.description, json.string),
+            ])
+            |> optional_field("description", config.description, json.string)
+            |> optional_field("ack_wait", config.ack_wait, duration_to_json)
+            |> optional_field(
+              "max_ack_pending",
+              config.max_ack_pending,
+              json.int,
+            )
+            |> optional_field("max_waiting", config.max_waiting, json.int)
+            |> optional_field("backoff", config.backoff, fn(delays) {
+              json.array(delays, duration_to_json)
+            })
+            |> optional_field(
+              "inactive_threshold",
+              config.inactive_threshold,
+              duration_to_json,
+            ),
           ),
         ),
       ]),
@@ -349,14 +395,14 @@ pub fn consumer_pull_next_messages(
     headers: [],
     payload: json_payload(json.object(
       []
-      |> optional_field("expires", expires, timestamp_to_json)
+      |> optional_field("expires", expires, duration_to_json)
       |> optional_field("batch", batch, json.int)
       |> optional_field("max_bytes", max_bytes, json.int),
     )),
   )
 }
 
-fn timestamp_to_json(duration: Duration) -> json.Json {
+fn duration_to_json(duration: Duration) -> json.Json {
   let #(seconds, nano_seconds) = duration.to_seconds_and_nanoseconds(duration)
   json.int(seconds * 1_000_000_000 + nano_seconds)
 }
