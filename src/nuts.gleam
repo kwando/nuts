@@ -485,9 +485,11 @@ fn handle_request_timeout(
       process.send(responder.subject, Error(RequestTimedOut))
       update_response_map(state, dict.delete(_, inbox))
     }
+
     // We got a timeout for a response which we have already responded to. This can happen if the
     // response is received after the timeout has already expired.
-    Error(_) -> state
+    // This delete should not be needed, but it doesnt' hurt.
+    Error(_) -> update_response_map(state, dict.delete(_, inbox))
   }
   |> actor.continue
 }
