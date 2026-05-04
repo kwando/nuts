@@ -1,7 +1,10 @@
 import gleam/bit_array
 import gleam/dynamic/decode.{type Decoder}
+import gleam/int
 import gleam/json
 import gleam/option.{type Option, None, Some}
+import gleam/result
+import gleam/string
 import gleam/time/calendar
 import gleam/time/duration.{type Duration}
 import gleam/time/timestamp.{type Timestamp}
@@ -270,6 +273,7 @@ pub fn consumer_create_request(
   deliver_policy deliver_policy: DeliverPolicy,
   ack_policy ack_policy: AckPolicy,
   replay_policy replay_policy: ReplayPolicy,
+  max_deliver max_deliver: Int,
 ) -> nuts.NatsMessage {
   nuts.NatsMessage(
     subject: "$JS.API.CONSUMER.CREATE." <> stream <> "." <> consumer_name,
@@ -284,6 +288,7 @@ pub fn consumer_create_request(
             [
               #("ack_policy", ack_policy_to_json(ack_policy)),
               #("replay_policy", replay_policy_to_json(replay_policy)),
+              #("max_deliver", json.int(max_deliver)),
               ..deliver_policy_to_json(deliver_policy)
             ]
             |> optional_field("description", description, json.string),
@@ -405,5 +410,74 @@ fn decode_stream_api_error(
   case error {
     Some(error) -> decode.success(Error(error))
     None -> callback()
+  }
+}
+
+pub type DeliveryInfo {
+  DeliveryInfo(
+    stream_seq: Int,
+    consumer_seq: Int,
+    timestamp: Timestamp,
+    delivery_count: Int,
+    pending: Int,
+  )
+}
+
+// $JS.ACK.nmea.nuts_example.1.1029024.940949.1777365454785427545.0
+pub fn parse_ack(value: String) -> Result(DeliveryInfo, Nil) {
+  case string.split(value, ".") {
+    [
+      "$JS",
+      "ACK",
+      _stream_name,
+      _consumer_name,
+      delivery_count,
+      stream_seq,
+      consumer_seq,
+      timestamp,
+      pending,
+    ] -> {
+      use stream_seq <- result.try(int.parse(stream_seq))
+      use consumer_seq <- result.try(int.parse(consumer_seq))
+      use timestamp <- result.try(int.parse(timestamp))
+      use delivery_count <- result.try(int.parse(delivery_count))
+      use pending <- result.try(int.parse(pending))
+
+      let timestamp =
+        timestamp.from_unix_seconds_and_nanoseconds(
+          timestamp / 1_000_000_000,
+          timestamp % 1_000_000_000,
+        )
+      Ok(DeliveryInfo(
+        stream_seq:,
+        consumer_seq:,
+        timestamp:,
+        delivery_count:,
+        pending:,
+      ))
+    }
+    _ -> Error(Nil)
+  }
+}
+
+pub type AckAction {
+  Ack
+  Nak
+  NakWithDelay(delay: duration.Duration)
+  Progress
+  Term
+}
+
+pub fn ack_action_to_payload(action: AckAction) -> BitArray {
+  case action {
+    Ack -> <<>>
+    Nak -> <<"-NAK">>
+    NakWithDelay(delay:) -> {
+      let delay_ns = duration.to_milliseconds(delay) * 1_000_000
+      let delay_str = int.to_string(delay_ns)
+      <<"-NAK {\"delay\": ":utf8, delay_str:utf8, "}":utf8>>
+    }
+    Progress -> <<"+WIP">>
+    Term -> <<"+TERM">>
   }
 }

@@ -1,10 +1,9 @@
 import gleam/bit_array
 import gleam/erlang/process.{type Subject}
 import gleam/json
-import gleam/option.{type Option, None, Some}
+import gleam/option.{type Option, None}
 import gleam/result
 import gleam/string
-import gleam/time/duration
 import nuts
 import nuts/internal/jetstream_api
 
@@ -120,6 +119,7 @@ pub fn create_consumer(
   deliver_policy deliver_policy: jetstream_api.DeliverPolicy,
   ack_policy ack_policy: jetstream_api.AckPolicy,
   replay_policy replay_policy: jetstream_api.ReplayPolicy,
+  max_deliver max_deliver: Int,
 ) -> Result(jetstream_api.ConsumerCreateResponse, JetstreamError) {
   use msg <- make_request(
     js,
@@ -130,6 +130,7 @@ pub fn create_consumer(
       deliver_policy,
       ack_policy,
       replay_policy,
+      max_deliver,
     ),
   )
   use decoded_result <- result.try(decode_response(
@@ -139,24 +140,6 @@ pub fn create_consumer(
   ))
   decoded_result
   |> result.map_error(map_api_error)
-}
-
-pub fn pull_next_messages(
-  js: JetstreamContext,
-  stream: String,
-  consumer_name: String,
-) -> Result(List(nuts.NatsMessage), JetstreamError) {
-  use msg <- make_request(
-    js,
-    jetstream_api.consumer_pull_next_messages(
-      stream,
-      consumer_name,
-      expires: Some(duration.seconds(30)),
-      batch: None,
-      max_bytes: None,
-    ),
-  )
-  todo
 }
 
 fn decode_response(js: JetstreamContext, msg: nuts.NatsMessage, decoder) {
