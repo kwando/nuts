@@ -1,6 +1,7 @@
 import gleam/bit_array
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
+import gleam/float
 import gleam/int
 import gleam/io
 import gleam/list
@@ -26,7 +27,6 @@ pub opaque type Options {
     host: String,
     port: Int,
     nkey_seed: Option(String),
-    reconnect_interval: Int,
     ping_interval: Int,
     ping_timeout: Int,
     logger: Logger,
@@ -39,7 +39,6 @@ pub fn new(host: String, port: Int) -> Options {
     host:,
     port:,
     nkey_seed: None,
-    reconnect_interval: 1000,
     ping_interval: 30_000,
     ping_timeout: 10_000,
     logger: noop_logger(),
@@ -59,12 +58,18 @@ pub fn with_name(options: Options, name: process.Name(Message)) -> Options {
   Options(..options, name: Some(name))
 }
 
-pub fn with_ping_interval(options: Options, ms: Int) -> Options {
-  Options(..options, ping_interval: ms)
+pub fn with_ping_interval(
+  options: Options,
+  milliseconds ping_interval: Int,
+) -> Options {
+  Options(..options, ping_interval:)
 }
 
-pub fn with_ping_timeout(options: Options, ms: Int) -> Options {
-  Options(..options, ping_timeout: ms)
+pub fn with_ping_timeout(
+  options: Options,
+  milliseconds ping_timeout: Int,
+) -> Options {
+  Options(..options, ping_timeout:)
 }
 
 pub type NatsMessage {
@@ -311,7 +316,6 @@ fn handle_socket_data(
   mug_message: mug.TcpMessage,
   state: ClientState,
 ) -> actor.Next(ClientState, a) {
-  state.logger.debug("handle_socket_data: " <> string.inspect(mug_message))
   case mug_message {
     mug.Packet(socket, data) -> {
       case state.socket {
@@ -549,8 +553,32 @@ fn close_connection(state: ClientState) {
 }
 
 fn schedule_reconnect(state: ClientState) {
-  process.send_after(state.self, state.options.reconnect_interval, Connect)
+  process.send_after(
+    state.self,
+    next_reconnect(state.connection_attempt),
+    Connect,
+  )
   state
+}
+
+fn next_reconnect(attempt) {
+  let clamped_attempt = int.clamp(attempt, max: 15, min: 1)
+
+  let last_delay =
+    float.power(1.5, int.to_float(clamped_attempt - 1))
+    |> result.unwrap(1.0)
+    |> float.round
+    |> int.multiply(100)
+
+  let exponential =
+    float.power(1.5, int.to_float(clamped_attempt))
+    |> result.unwrap(1.0)
+    |> float.round
+    |> int.multiply(100)
+
+  let jitter = int.random(exponential - last_delay)
+
+  exponential + jitter
 }
 
 fn parse_server_messages(state, buffer) -> Result(ClientState, NatsError) {
@@ -559,7 +587,10 @@ fn parse_server_messages(state, buffer) -> Result(ClientState, NatsError) {
       let state = ClientState(..state, buffer: remaining_bytes)
       case handle_server_message(state, message) {
         Ok(state) ->
-          parse_server_messages(reschedule_ping(state), remaining_bytes)
+          state
+          |> reschedule_ping
+          |> parse_server_messages(remaining_bytes)
+
         Error(err) -> Error(err)
       }
     }
@@ -570,8 +601,10 @@ fn parse_server_messages(state, buffer) -> Result(ClientState, NatsError) {
 
 fn send_bits(state: ClientState, bits: BitArray) {
   state.logger.debug(
-    ">>"
-    <> bit_array.to_string(bits) |> result.unwrap("<<binary is not a string>>"),
+    ">> "
+    <> bit_array.to_string(bits)
+    |> result.map(string.trim_end)
+    |> result.unwrap("<<binary is not a string>>"),
   )
   case state.socket {
     Some(socket) -> {
@@ -587,6 +620,7 @@ fn handle_server_message(
   state: ClientState,
   message: protocol.ServerMessage,
 ) -> Result(ClientState, NatsError) {
+  state.logger.debug("<< " <> string.inspect(message))
   case message {
     protocol.Info(server_info) -> {
       let auth = case state.options.nkey_seed, server_info.nonce {
@@ -633,7 +667,11 @@ fn handle_server_message(
         Error(err) -> Error(err)
       }
     }
-    protocol.Pong -> Ok(cancel_pong_timeout(reschedule_ping(state)))
+    protocol.Pong ->
+      state
+      |> cancel_pong_timeout
+      |> schedule_ping
+      |> Ok
     protocol.Msg(topic:, sid:, reply_to:, payload:) -> {
       broadcast_message(
         state,
@@ -730,7 +768,7 @@ fn get_status(headers: List(#(String, String))) -> Option(String) {
 }
 
 fn setup_connection(state: ClientState) {
-  state.logger.debug(
+  state.logger.info(
     "setup connection " <> int.to_string(state.connection_attempt),
   )
   assert state.socket == None as "cant reconnect when there is an open socket"
@@ -748,10 +786,10 @@ fn setup_connection(state: ClientState) {
         <> ":"
         <> int.to_string(state.options.port),
       )
-      ClientState(..state, socket: Some(socket))
+      ClientState(..state, socket: Some(socket), connection_attempt: 1)
     }
     Error(err) -> {
-      state.logger.debug("failed to connect: " <> string.inspect(err))
+      state.logger.warning("failed to connect: " <> string.inspect(err))
       ClientState(
         ..state,
         socket: None,

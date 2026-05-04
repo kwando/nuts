@@ -7,7 +7,16 @@ import nuts
 
 pub fn main() {
   let assert Ok(actor.Started(_, nats)) =
-    nuts.start(nuts.new("127.0.0.1", 4222))
+    nuts.start(
+      nuts.new("127.0.0.1", 6789)
+      |> nuts.with_logger(nuts.Logger(
+        info: io.println_error,
+        debug: io.println_error,
+        warning: io.println_error,
+      ))
+      |> nuts.with_ping_interval(30_000)
+      |> nuts.with_ping_timeout(10_000),
+    )
 
   let assert Ok(me) = nuts.subscribe(nats, ">")
 
