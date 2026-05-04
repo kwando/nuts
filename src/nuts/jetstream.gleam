@@ -28,7 +28,7 @@ pub fn with_logger(
 
 pub type JetstreamError {
   ConnectionError(nuts.NatsError)
-  ResponseDecodeError(json.DecodeError)
+  ResponseDecodeError(json.DecodeError, input: BitArray)
   ApiError(code: Int, description: String, err_code: Int)
   StreamNotFound
   StreamAlreadyExistsWithDifferentConfig
@@ -146,7 +146,7 @@ fn decode_response(js: JetstreamContext, msg: nuts.NatsMessage, decoder) {
   js.log(msg |> string.inspect)
   js.log(msg.payload |> bit_array.to_string |> result.unwrap("<<binary>>"))
   json.parse_bits(msg.payload, decoder)
-  |> result.map_error(ResponseDecodeError)
+  |> result.map_error(ResponseDecodeError(_, msg.payload))
 }
 
 fn map_api_error(err: jetstream_api.StreamApiError) {
