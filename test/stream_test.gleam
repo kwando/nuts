@@ -86,6 +86,40 @@ pub fn consumer_test() {
       consumer_name: "nonexistent_consumer",
     )
 
+  let assert Ok(deleted) =
+    jetstream.delete_consumer(conn, stream: "my_stream", consumer_name:)
+  assert deleted.success == True
+
+  let assert Error(jetstream.ConsumerNotFound) =
+    jetstream.get_consumer_info(conn, stream: "my_stream", consumer_name:)
+
+  let assert Ok(_) =
+    jetstream.create_consumer(
+      conn,
+      stream: "my_stream",
+      consumer_name:,
+      config: jetstream_api.ConsumerConfig(
+        ..jetstream_api.default_consumer_config(),
+        durable: True,
+        deliver_policy: jetstream_api.All,
+        ack_policy: jetstream_api.AckExplicit,
+        max_deliver: 10,
+        replay_policy: jetstream_api.Instant,
+      ),
+    )
+
+  let assert Ok(updated) =
+    jetstream.update_stream(
+      conn,
+      jetstream_api.StreamCreateRequest(
+        ..stream_config,
+        description: Some("updated description"),
+        subjects: ["bar.*", "baz.*"],
+      ),
+    )
+  assert updated.config.description == Some("updated description")
+  assert updated.config.subjects == ["bar.*", "baz.*"]
+
   let gen = friendly_id.new_generator()
   process.spawn(fn() { producer_loop(nats_conn, "bar.1", 100, gen) })
   process.spawn(fn() { producer_loop(nats_conn, "bar.2", 100, gen) })

@@ -15,6 +15,67 @@ pub fn consumer_get_info_request_subject_test() {
   assert msg.subject == "$JS.API.CONSUMER.INFO.my_stream.my_consumer"
 }
 
+pub fn consumer_delete_request_subject_test() {
+  let msg =
+    jetstream_api.consumer_delete_request(
+      stream: "my_stream",
+      consumer_name: "my_consumer",
+    )
+  assert msg.subject == "$JS.API.CONSUMER.DELETE.my_stream.my_consumer"
+}
+
+pub fn consumer_delete_response_decoder_test() {
+  let payload = bit_array.from_string("{\"success\":true}")
+  let assert Ok(result) =
+    json.parse_bits(payload, jetstream_api.consumer_delete_response_decoder())
+  let assert Ok(response) = result
+  assert response.success == True
+}
+
+pub fn consumer_delete_response_error_test() {
+  let payload =
+    bit_array.from_string(
+      "{\"error\":{\"code\":404,\"description\":\"consumer not found\",\"err_code\":10014}}",
+    )
+  let assert Ok(result) =
+    json.parse_bits(payload, jetstream_api.consumer_delete_response_decoder())
+  let assert Error(err) = result
+  assert err.err_code == 10_014
+}
+
+pub fn stream_update_request_subject_test() {
+  let request =
+    jetstream_api.StreamCreateRequest(
+      stream_name: "events",
+      description: Some("updated stream"),
+      subjects: ["foo.>", "bar.>"],
+      retention: jetstream_api.Limits,
+      max_consumers: -1,
+      max_msgs: -1,
+      max_bytes: -1,
+      max_age: 0,
+      storage: jetstream_api.Memory,
+      num_replicas: 1,
+      discard_policy: jetstream_api.DiscardOld,
+    )
+  let msg = jetstream_api.stream_update_request(request)
+  assert msg.subject == "$JS.API.STREAM.UPDATE.events"
+  let assert Ok(str) = bit_array.to_string(msg.payload)
+  let assert Ok(decoded) = json.parse(str, update_request_decoder())
+  assert decoded.name == "events"
+  assert decoded.description == Some("updated stream")
+  assert decoded.subjects == ["foo.>", "bar.>"]
+}
+
+pub fn stream_update_response_decoder_test() {
+  let assert Ok(payload) =
+    simplifile.read_bits("test/fixtures/stream_info_response.json")
+  let assert Ok(result) =
+    json.parse_bits(payload, jetstream_api.stream_update_response_decoder())
+  let assert Ok(info) = result
+  assert info.config.name == "my_stream"
+}
+
 pub fn consumer_get_info_response_decoder_test() {
   let assert Ok(payload) =
     simplifile.read_bits("test/fixtures/consumer_info_response.json")
@@ -165,6 +226,25 @@ fn decode_payload(payload: BitArray) -> DecodedMessage {
 
 type DecodedMessage {
   DecodedMessage(stream_name: String, config: DecodedConfig)
+}
+
+type DecodedUpdateRequest {
+  DecodedUpdateRequest(
+    name: String,
+    description: Option(String),
+    subjects: List(String),
+  )
+}
+
+fn update_request_decoder() -> decode.Decoder(DecodedUpdateRequest) {
+  use name <- decode.field("name", decode.string)
+  use description <- decode.optional_field(
+    "description",
+    None,
+    decode.optional(decode.string),
+  )
+  use subjects <- decode.field("subjects", decode.list(decode.string))
+  decode.success(DecodedUpdateRequest(name:, description:, subjects:))
 }
 
 type DecodedConfig {

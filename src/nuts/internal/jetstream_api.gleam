@@ -226,6 +226,41 @@ pub fn stream_delete_response_decoder() {
   decode.success(Ok(StreamDeleteResponse(success)))
 }
 
+pub fn stream_update_request(request: StreamCreateRequest) -> NatsMessage {
+  NatsMessage(
+    subject: "$JS.API.STREAM.UPDATE." <> request.stream_name,
+    reply_to: None,
+    headers: [],
+    payload: json_payload(json.object(
+      [
+        #("name", json.string(request.stream_name)),
+        #("subjects", json.array(request.subjects, json.string)),
+        #("retention", json.string(retention_to_string(request.retention))),
+        #("max_consumers", json.int(request.max_consumers)),
+        #("max_msgs", json.int(request.max_msgs)),
+        #("max_bytes", json.int(request.max_bytes)),
+        #("max_age", json.int(request.max_age)),
+        #("storage", json.string(storage_to_string(request.storage))),
+        #("num_replicas", json.int(request.num_replicas)),
+        #(
+          "discard",
+          json.string(discard_policy_to_string(request.discard_policy)),
+        ),
+      ]
+      |> optional_field("description", request.description, json.string),
+    )),
+  )
+}
+
+pub fn stream_update_response_decoder() -> Decoder(
+  Result(StreamGetInfoResponse, StreamApiError),
+) {
+  use <- decode_stream_api_error()
+  use config <- decode.field("config", stream_config_decoder())
+  use state <- decode.field("state", stream_state_decoder())
+  decode.success(Ok(StreamGetInfoResponse(config:, state:)))
+}
+
 fn discard_policy_to_string(discard_policy: DiscardPolicy) -> String {
   case discard_policy {
     DiscardNew -> "new"
@@ -392,6 +427,30 @@ pub fn consumer_get_info_request(
     headers: [],
     payload: bit_array.from_string(""),
   )
+}
+
+pub fn consumer_delete_request(
+  stream stream: String,
+  consumer_name consumer_name: String,
+) -> NatsMessage {
+  NatsMessage(
+    subject: "$JS.API.CONSUMER.DELETE." <> stream <> "." <> consumer_name,
+    reply_to: None,
+    headers: [],
+    payload: bit_array.from_string(""),
+  )
+}
+
+pub type ConsumerDeleteResponse {
+  ConsumerDeleteResponse(success: Bool)
+}
+
+pub fn consumer_delete_response_decoder() -> Decoder(
+  Result(ConsumerDeleteResponse, StreamApiError),
+) {
+  use <- decode_stream_api_error()
+  use success <- decode.field("success", decode.bool)
+  decode.success(Ok(ConsumerDeleteResponse(success)))
 }
 
 pub type ConsumerGetInfoResponse {

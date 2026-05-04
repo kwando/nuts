@@ -112,6 +112,20 @@ pub fn delete_stream(
   |> result.map_error(map_api_error)
 }
 
+pub fn update_stream(
+  js: JetstreamContext,
+  options: jetstream_api.StreamCreateRequest,
+) -> Result(jetstream_api.StreamGetInfoResponse, JetstreamError) {
+  use msg <- make_request(js, jetstream_api.stream_update_request(options))
+  use decoded_result <- result.try(decode_response(
+    js,
+    msg,
+    jetstream_api.stream_update_response_decoder(),
+  ))
+  decoded_result
+  |> result.map_error(map_api_error)
+}
+
 pub fn create_consumer(
   js: JetstreamContext,
   stream stream: String,
@@ -144,6 +158,24 @@ pub fn get_consumer_info(
     js,
     msg,
     jetstream_api.consumer_get_info_response_decoder(),
+  ))
+  decoded_result
+  |> result.map_error(map_api_error)
+}
+
+pub fn delete_consumer(
+  js: JetstreamContext,
+  stream stream: String,
+  consumer_name consumer_name: String,
+) -> Result(jetstream_api.ConsumerDeleteResponse, JetstreamError) {
+  use msg <- make_request(
+    js,
+    jetstream_api.consumer_delete_request(stream:, consumer_name:),
+  )
+  use decoded_result <- result.try(decode_response(
+    js,
+    msg,
+    jetstream_api.consumer_delete_response_decoder(),
   ))
   decoded_result
   |> result.map_error(map_api_error)
