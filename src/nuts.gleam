@@ -477,6 +477,8 @@ fn handle_request_timeout(
 ) -> actor.Next(ClientState, a) {
   case dict.get(state.response_map, inbox) {
     Ok(responder) -> {
+      // This message should have been sent from the timer that we are now trying to cancel.
+      // This assertion is only kept here for reference.
       assert process.cancel_timer(responder.timeout_timer)
         == process.TimerNotFound
         as "this message should have come from the responder"
