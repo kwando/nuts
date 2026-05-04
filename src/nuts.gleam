@@ -815,10 +815,6 @@ pub type Logger {
   )
 }
 
-fn noop(_) {
-  Nil
-}
-
 fn stderr_log(msg) {
   io.println_error(msg)
 }
@@ -828,6 +824,7 @@ fn add_context(log: fn(String) -> Nil, context) {
 }
 
 pub fn noop_logger() {
+  let noop = fn(_) { Nil }
   Logger(info: noop, debug: noop, warning: noop)
 }
 
