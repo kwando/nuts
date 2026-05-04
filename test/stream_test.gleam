@@ -2,14 +2,12 @@ import gleam/bit_array
 import gleam/bool
 import gleam/erlang/process.{type Subject}
 import gleam/int
-import gleam/io
 import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/actor
 import gleam/result
 import gleam/string
-import gleam_community/ansi
 import nuts.{type Message} as nats
 import nuts/internal/jetstream_api
 import nuts/jetstream
@@ -94,7 +92,7 @@ pub fn consumer_test() {
 }
 
 fn producer_loop(conn: Subject(Message), subject: String, sleep: Int) {
-  nats.publish(conn, nats.new_message(subject, <<"3189131+13">>))
+  let _ = nats.publish(conn, nats.new_message(subject, <<"3189131+13">>))
   process.sleep(int.random(sleep))
   producer_loop(conn, subject, sleep)
 }
