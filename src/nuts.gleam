@@ -27,6 +27,8 @@ pub opaque type Options {
     port: Int,
     nkey_seed: Option(String),
     reconnect_interval: Int,
+    ping_interval: Int,
+    ping_timeout: Int,
     logger: Logger,
     name: Option(process.Name(Message)),
   )
@@ -38,6 +40,8 @@ pub fn new(host: String, port: Int) -> Options {
     port:,
     nkey_seed: None,
     reconnect_interval: 1000,
+    ping_interval: 30_000,
+    ping_timeout: 10_000,
     logger: noop_logger(),
     name: None,
   )
@@ -53,6 +57,14 @@ pub fn with_logger(options: Options, logger: Logger) {
 
 pub fn with_name(options: Options, name: process.Name(Message)) -> Options {
   Options(..options, name: Some(name))
+}
+
+pub fn with_ping_interval(options: Options, ms: Int) -> Options {
+  Options(..options, ping_interval: ms)
+}
+
+pub fn with_ping_timeout(options: Options, ms: Int) -> Options {
+  Options(..options, ping_timeout: ms)
 }
 
 pub type NatsMessage {
@@ -91,6 +103,8 @@ pub opaque type Message {
     reply: Subject(Result(Nil, NatsError)),
   )
   RequestTimeout(inbox: String)
+  PingTick
+  PongTimeout
   SocketData(mug.TcpMessage)
   SubscriberDown(process.Down)
   Unsubscribe(Subscription, Subject(Result(Nil, NatsError)))
@@ -186,6 +200,8 @@ type ClientState {
     connection_attempt: Int,
     inbox_prefix: String,
     response_map: Dict(String, Responder),
+    ping_timer: Option(process.Timer),
+    pong_timeout_timer: Option(process.Timer),
   )
 }
 
@@ -205,6 +221,8 @@ pub fn start(options: Options) {
       connection_attempt: 1,
       response_map: dict.new(),
       inbox_prefix: new_inbox_prefix(),
+      ping_timer: None,
+      pong_timeout_timer: None,
     ))
     |> actor.selecting(
       process.new_selector()
@@ -275,7 +293,13 @@ fn handle_message(
       handle_request(state, message, reply, reply_subject, timeout)
 
     RequestTimeout(inbox) -> handle_request_timeout(state, inbox)
+    PingTick -> handle_ping_tick(state)
+    PongTimeout -> {
+      state.logger.warning("pong timeout — closing connection")
+      actor.continue(close_connection(state))
+    }
     Shutdown(reply) -> {
+      let _ = cancel_ping_timers(state)
       actor.send(reply, Nil)
       actor.stop()
     }
@@ -506,6 +530,7 @@ fn encode_message(msg: NatsMessage) -> BitArray {
 }
 
 fn close_connection(state: ClientState) {
+  let state = cancel_ping_timers(state)
   state.logger.debug("close connection")
   case state.socket {
     Some(socket) -> {
@@ -533,7 +558,8 @@ fn parse_server_messages(state, buffer) -> Result(ClientState, NatsError) {
     protocol.Continue(message, remaining_bytes) -> {
       let state = ClientState(..state, buffer: remaining_bytes)
       case handle_server_message(state, message) {
-        Ok(state) -> parse_server_messages(state, remaining_bytes)
+        Ok(state) ->
+          parse_server_messages(reschedule_ping(state), remaining_bytes)
         Error(err) -> Error(err)
       }
     }
@@ -590,6 +616,7 @@ fn handle_server_message(
             Ok(_) -> {
               ClientState(..state, server_info: Some(server_info))
               |> resubscribe
+              |> result.map(schedule_ping)
             }
             Error(err) -> Error(err)
           }
@@ -606,7 +633,7 @@ fn handle_server_message(
         Error(err) -> Error(err)
       }
     }
-    protocol.Pong -> Ok(state)
+    protocol.Pong -> Ok(cancel_pong_timeout(reschedule_ping(state)))
     protocol.Msg(topic:, sid:, reply_to:, payload:) -> {
       broadcast_message(
         state,
@@ -809,6 +836,69 @@ fn new_inbox_prefix() -> String {
 
 fn new_inbox_from_prefix(prefix: String) -> String {
   prefix <> random_string(5)
+}
+
+fn handle_ping_tick(state: ClientState) -> actor.Next(ClientState, a) {
+  case state.socket {
+    Some(_) -> {
+      case send_bits(state, command.encode_ping()) {
+        Ok(_) -> {
+          let timer =
+            process.send_after(
+              state.self,
+              state.options.ping_timeout,
+              PongTimeout,
+            )
+          actor.continue(
+            ClientState(
+              ..state,
+              ping_timer: None,
+              pong_timeout_timer: Some(timer),
+            ),
+          )
+        }
+        Error(_) -> actor.continue(close_connection(state))
+      }
+    }
+    None -> actor.continue(state)
+  }
+}
+
+fn schedule_ping(state: ClientState) -> ClientState {
+  let timer =
+    process.send_after(state.self, state.options.ping_interval, PingTick)
+  ClientState(..state, ping_timer: Some(timer))
+}
+
+fn reschedule_ping(state: ClientState) -> ClientState {
+  case state.ping_timer {
+    Some(timer) -> {
+      process.cancel_timer(timer)
+      schedule_ping(state)
+    }
+    None -> state
+  }
+}
+
+fn cancel_pong_timeout(state: ClientState) -> ClientState {
+  case state.pong_timeout_timer {
+    Some(timer) -> {
+      process.cancel_timer(timer)
+      ClientState(..state, pong_timeout_timer: None)
+    }
+    None -> state
+  }
+}
+
+fn cancel_ping_timers(state: ClientState) -> ClientState {
+  let state = case state.ping_timer {
+    Some(timer) -> {
+      process.cancel_timer(timer)
+      ClientState(..state, ping_timer: None)
+    }
+    None -> state
+  }
+  cancel_pong_timeout(state)
 }
 
 // Logger

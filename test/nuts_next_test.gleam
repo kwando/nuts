@@ -185,3 +185,19 @@ pub fn named_connection_test() {
   let conn = process.named_subject(name)
   assert test_utils.await_connected(conn, 10) as "should be connected"
 }
+
+pub fn ping_keeps_connection_alive_test() {
+  use port <- test_utils.with_nats_server()
+  let options =
+    nats.new("127.0.0.1", port)
+    |> nats.with_ping_interval(200)
+    |> nats.with_ping_timeout(100)
+
+  let assert Ok(Started(_, conn)) = nats.start(options)
+  assert test_utils.await_connected(conn, 10)
+
+  process.sleep(3000)
+
+  assert nats.is_connected(conn)
+    as "connection should still be alive after ping interval"
+}
