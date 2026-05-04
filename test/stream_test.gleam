@@ -1,5 +1,6 @@
 import friendly_id
 import gleam/bit_array
+import gleam/bool
 import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/io
@@ -70,6 +71,18 @@ pub fn consumer_test() {
       ),
     )
 
+  let assert Ok(info) =
+    jetstream.get_consumer_info(conn, stream: "my_stream", consumer_name:)
+  assert info.stream_name == "my_stream"
+  assert info.name == consumer_name
+
+  let assert Error(jetstream.ConsumerNotFound) =
+    jetstream.get_consumer_info(
+      conn,
+      stream: "my_stream",
+      consumer_name: "nonexistent_consumer",
+    )
+
   let gen = friendly_id.new_generator()
   process.spawn(fn() { producer_loop(nats_conn, "bar.1", 100, gen) })
   process.spawn(fn() { producer_loop(nats_conn, "bar.2", 100, gen) })
@@ -85,6 +98,7 @@ pub fn consumer_test() {
       1000,
       500,
       fn(msg, info: DeliveryInfo) {
+        use <- bool.guard(when: True, return: simple_consumer.ack())
         io.println_error(
           msg.subject
           <> " "
@@ -102,7 +116,7 @@ pub fn consumer_test() {
       },
     )
 
-  process.sleep(2000)
+  process.sleep(200)
 
   let assert Error(jetstream.StreamAlreadyExistsWithDifferentConfig) =
     jetstream.create_stream(

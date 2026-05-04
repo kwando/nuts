@@ -32,6 +32,7 @@ pub type JetstreamError {
   ApiError(code: Int, description: String, err_code: Int)
   StreamNotFound
   StreamAlreadyExistsWithDifferentConfig
+  ConsumerNotFound
 }
 
 pub fn list_stream_names(
@@ -130,6 +131,24 @@ pub fn create_consumer(
   |> result.map_error(map_api_error)
 }
 
+pub fn get_consumer_info(
+  js: JetstreamContext,
+  stream stream: String,
+  consumer_name consumer_name: String,
+) -> Result(jetstream_api.ConsumerGetInfoResponse, JetstreamError) {
+  use msg <- make_request(
+    js,
+    jetstream_api.consumer_get_info_request(stream:, consumer_name:),
+  )
+  use decoded_result <- result.try(decode_response(
+    js,
+    msg,
+    jetstream_api.consumer_get_info_response_decoder(),
+  ))
+  decoded_result
+  |> result.map_error(map_api_error)
+}
+
 fn decode_response(js: JetstreamContext, msg: nuts.NatsMessage, decoder) {
   js.log(msg |> string.inspect)
   js.log(msg.payload |> bit_array.to_string |> result.unwrap("<<binary>>"))
@@ -141,6 +160,7 @@ fn map_api_error(err: jetstream_api.StreamApiError) {
   case err.err_code {
     10_059 -> StreamNotFound
     10_058 -> StreamAlreadyExistsWithDifferentConfig
+    10_014 -> ConsumerNotFound
     _ ->
       ApiError(
         code: err.code,

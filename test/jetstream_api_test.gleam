@@ -4,6 +4,41 @@ import gleam/json
 import gleam/option.{type Option, None, Some}
 import gleam/time/duration
 import nuts/internal/jetstream_api
+import simplifile
+
+pub fn consumer_get_info_request_subject_test() {
+  let msg =
+    jetstream_api.consumer_get_info_request(
+      stream: "my_stream",
+      consumer_name: "my_consumer",
+    )
+  assert msg.subject == "$JS.API.CONSUMER.INFO.my_stream.my_consumer"
+}
+
+pub fn consumer_get_info_response_decoder_test() {
+  let assert Ok(payload) =
+    simplifile.read_bits("test/fixtures/consumer_info_response.json")
+  let assert Ok(result) =
+    json.parse_bits(payload, jetstream_api.consumer_get_info_response_decoder())
+  let assert Ok(info) = result
+  assert info.stream_name == "my_stream"
+  assert info.name == "my_stream_consumer"
+  assert info.num_pending == 0
+  assert info.num_ack_pending == 0
+  assert info.num_redelivered == 0
+  assert info.num_waiting == 0
+}
+
+pub fn consumer_get_info_response_error_test() {
+  let payload =
+    bit_array.from_string(
+      "{\"error\":{\"code\":404,\"description\":\"consumer not found\",\"err_code\":10014}}",
+    )
+  let assert Ok(result) =
+    json.parse_bits(payload, jetstream_api.consumer_get_info_response_decoder())
+  let assert Error(err) = result
+  assert err.err_code == 10_014
+}
 
 pub fn default_config_subject_test() {
   let config = jetstream_api.default_consumer_config()

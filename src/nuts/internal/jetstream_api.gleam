@@ -382,6 +382,57 @@ pub fn consumer_create_response_decoder() -> Decoder(
   )
 }
 
+pub fn consumer_get_info_request(
+  stream stream: String,
+  consumer_name consumer_name: String,
+) -> NatsMessage {
+  NatsMessage(
+    subject: "$JS.API.CONSUMER.INFO." <> stream <> "." <> consumer_name,
+    reply_to: None,
+    headers: [],
+    payload: bit_array.from_string(""),
+  )
+}
+
+pub type ConsumerGetInfoResponse {
+  ConsumerGetInfoResponse(
+    stream_name: String,
+    name: String,
+    created: Timestamp,
+    timestamp: Timestamp,
+    num_pending: Int,
+    num_ack_pending: Int,
+    num_redelivered: Int,
+    num_waiting: Int,
+  )
+}
+
+pub fn consumer_get_info_response_decoder() -> Decoder(
+  Result(ConsumerGetInfoResponse, StreamApiError),
+) {
+  use <- decode_stream_api_error()
+  use stream_name <- decode.field("stream_name", decode.string)
+  use name <- decode.field("name", decode.string)
+  use created <- decode.field("created", decode_timestamp())
+  use timestamp <- decode.field("ts", decode_timestamp())
+  use num_pending <- decode.optional_field("num_pending", 0, decode.int)
+  use num_ack_pending <- decode.optional_field("num_ack_pending", 0, decode.int)
+  use num_redelivered <- decode.optional_field("num_redelivered", 0, decode.int)
+  use num_waiting <- decode.optional_field("num_waiting", 0, decode.int)
+  decode.success(
+    Ok(ConsumerGetInfoResponse(
+      stream_name:,
+      name:,
+      created:,
+      timestamp:,
+      num_pending:,
+      num_ack_pending:,
+      num_redelivered:,
+      num_waiting:,
+    )),
+  )
+}
+
 pub fn consumer_pull_next_messages(
   stream stream: String,
   consumer consumer: String,
