@@ -16,7 +16,8 @@ import nuts/internal/command
 import nuts/internal/protocol.{type ServerInfo}
 
 @external(erlang, "nuts_ffi", "random_string")
-fn random_string(length: Int) -> String
+@internal
+pub fn random_string(length: Int) -> String
 
 const actor_timeout = 5000
 

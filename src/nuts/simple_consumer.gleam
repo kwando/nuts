@@ -47,7 +47,7 @@ pub fn start(
   threshold: Int,
   handler: fn(nats.NatsMessage, DeliveryInfo) -> HandlerReply,
 ) -> Result(actor.Started(Nil), actor.StartError) {
-  let inbox_prefix = "consumer." <> int.random(382_982) |> int.to_base36 <> "."
+  let inbox_prefix = "consumer." <> nats.random_string(10) <> "."
   actor.new_with_initialiser(1000, fn(self) {
     let assert Ok(subscription) = nats.subscribe(conn, inbox_prefix <> "*")
 
