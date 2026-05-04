@@ -398,6 +398,7 @@ pub type ConsumerGetInfoResponse {
   ConsumerGetInfoResponse(
     stream_name: String,
     name: String,
+    config: ConsumerConfig,
     created: Timestamp,
     timestamp: Timestamp,
     num_pending: Int,
@@ -413,6 +414,7 @@ pub fn consumer_get_info_response_decoder() -> Decoder(
   use <- decode_stream_api_error()
   use stream_name <- decode.field("stream_name", decode.string)
   use name <- decode.field("name", decode.string)
+  use config <- decode.field("config", consumer_config_decoder())
   use created <- decode.field("created", decode_timestamp())
   use timestamp <- decode.field("ts", decode_timestamp())
   use num_pending <- decode.optional_field("num_pending", 0, decode.int)
@@ -423,6 +425,7 @@ pub fn consumer_get_info_response_decoder() -> Decoder(
     Ok(ConsumerGetInfoResponse(
       stream_name:,
       name:,
+      config:,
       created:,
       timestamp:,
       num_pending:,
@@ -431,6 +434,105 @@ pub fn consumer_get_info_response_decoder() -> Decoder(
       num_waiting:,
     )),
   )
+}
+
+fn consumer_config_decoder() -> Decoder(ConsumerConfig) {
+  use durable_name <- decode.optional_field(
+    "durable_name",
+    None,
+    decode.optional(decode.string),
+  )
+  use description <- decode.optional_field(
+    "description",
+    None,
+    decode.optional(decode.string),
+  )
+  use deliver_policy <- decode.field("deliver_policy", deliver_policy_decoder())
+  use ack_policy <- decode.field("ack_policy", ack_policy_decoder())
+  use ack_wait <- decode.optional_field(
+    "ack_wait",
+    None,
+    decode.optional(duration_from_ns_decoder()),
+  )
+  use max_deliver <- decode.optional_field("max_deliver", -1, decode.int)
+  use max_ack_pending <- decode.optional_field(
+    "max_ack_pending",
+    None,
+    decode.optional(decode.int),
+  )
+  use max_waiting <- decode.optional_field(
+    "max_waiting",
+    None,
+    decode.optional(decode.int),
+  )
+  use backoff <- decode.optional_field(
+    "backoff",
+    None,
+    decode.optional(decode.list(duration_from_ns_decoder())),
+  )
+  use inactive_threshold <- decode.optional_field(
+    "inactive_threshold",
+    None,
+    decode.optional(duration_from_ns_decoder()),
+  )
+  use replay_policy <- decode.field("replay_policy", replay_policy_decoder())
+  decode.success(ConsumerConfig(
+    description:,
+    durable: durable_name != None,
+    deliver_policy:,
+    ack_policy:,
+    ack_wait:,
+    max_deliver:,
+    max_ack_pending:,
+    max_waiting:,
+    backoff:,
+    inactive_threshold:,
+    replay_policy:,
+  ))
+}
+
+fn deliver_policy_decoder() -> Decoder(DeliverPolicy) {
+  decode.then(decode.string, fn(policy) {
+    case policy {
+      "all" -> decode.success(All)
+      "new" -> decode.success(New)
+      "last" -> decode.success(Last)
+      "by_start_sequence" -> {
+        use seq <- decode.field("opt_start_seq", decode.int)
+        decode.success(ByStartSequence(seq))
+      }
+      "by_start_time" -> {
+        use ts <- decode.field("opt_start_time", decode_timestamp())
+        decode.success(ByStartTime(ts))
+      }
+      _ -> decode.failure(All, "deliver_policy")
+    }
+  })
+}
+
+fn ack_policy_decoder() -> Decoder(AckPolicy) {
+  decode.then(decode.string, fn(policy) {
+    case policy {
+      "none" -> decode.success(NoAck)
+      "all" -> decode.success(AckAll)
+      "explicit" -> decode.success(AckExplicit)
+      _ -> decode.failure(AckExplicit, "ack_policy")
+    }
+  })
+}
+
+fn replay_policy_decoder() -> Decoder(ReplayPolicy) {
+  decode.then(decode.string, fn(policy) {
+    case policy {
+      "instant" -> decode.success(Instant)
+      "original" -> decode.success(Original)
+      _ -> decode.success(Instant)
+    }
+  })
+}
+
+fn duration_from_ns_decoder() -> Decoder(Duration) {
+  decode.then(decode.int, fn(ns) { decode.success(duration.nanoseconds(ns)) })
 }
 
 pub fn consumer_pull_next_messages(

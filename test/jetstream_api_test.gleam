@@ -23,6 +23,11 @@ pub fn consumer_get_info_response_decoder_test() {
   let assert Ok(info) = result
   assert info.stream_name == "my_stream"
   assert info.name == "my_stream_consumer"
+  assert info.config.durable == True
+  assert info.config.ack_policy == jetstream_api.AckExplicit
+  assert info.config.replay_policy == jetstream_api.Instant
+  assert info.config.deliver_policy == jetstream_api.All
+  assert info.config.max_deliver == 10
   assert info.num_pending == 0
   assert info.num_ack_pending == 0
   assert info.num_redelivered == 0

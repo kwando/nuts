@@ -75,6 +75,9 @@ pub fn consumer_test() {
     jetstream.get_consumer_info(conn, stream: "my_stream", consumer_name:)
   assert info.stream_name == "my_stream"
   assert info.name == consumer_name
+  assert info.config.durable == True
+  assert info.config.ack_policy == jetstream_api.AckExplicit
+  assert info.config.replay_policy == jetstream_api.Instant
 
   let assert Error(jetstream.ConsumerNotFound) =
     jetstream.get_consumer_info(
