@@ -6,7 +6,7 @@ import gleam/result
 import gleam/string
 import gleam/time/duration
 import nuts
-import nuts/internal/stream_api
+import nuts/internal/jetstream_api
 
 pub opaque type JetstreamContext {
   JetstreamContext(
@@ -37,27 +37,27 @@ pub type JetstreamError {
 
 pub fn list_stream_names(
   js: JetstreamContext,
-) -> Result(stream_api.StreamNamesResponse, JetstreamError) {
+) -> Result(jetstream_api.StreamNamesResponse, JetstreamError) {
   let assert Ok(msg) =
     nuts.request(
       js.conn,
-      stream_api.list_stream_names_request(None, None),
+      jetstream_api.list_stream_names_request(None, None),
       js.request_timeout,
     )
 
-  decode_response(js, msg, stream_api.stream_names_response_decoder())
+  decode_response(js, msg, jetstream_api.stream_names_response_decoder())
 }
 
 pub fn create_stream(
   js: JetstreamContext,
-  options: stream_api.StreamCreateRequest,
-) -> Result(stream_api.StreamCreateResponse, JetstreamError) {
-  use msg <- make_request(js, stream_api.stream_create_request(options))
+  options: jetstream_api.StreamCreateRequest,
+) -> Result(jetstream_api.StreamCreateResponse, JetstreamError) {
+  use msg <- make_request(js, jetstream_api.stream_create_request(options))
 
   use api_response <- result.try(decode_response(
     js,
     msg,
-    stream_api.stream_create_response_decoder(),
+    jetstream_api.stream_create_response_decoder(),
   ))
   api_response
   |> result.map_error(map_api_error)
@@ -66,10 +66,10 @@ pub fn create_stream(
 pub fn get_info(
   js: JetstreamContext,
   stream: String,
-) -> Result(stream_api.StreamGetInfoResponse, JetstreamError) {
+) -> Result(jetstream_api.StreamGetInfoResponse, JetstreamError) {
   use resp <- make_request(
     js,
-    stream_api.stream_get_info_request(
+    jetstream_api.stream_get_info_request(
       stream:,
       deleted_details: False,
       subjects_filter: None,
@@ -81,7 +81,7 @@ pub fn get_info(
   use decoded_result <- result.try(decode_response(
     js,
     resp,
-    stream_api.stream_get_info_response_decoder(),
+    jetstream_api.stream_get_info_response_decoder(),
   ))
   decoded_result
   |> result.map_error(map_api_error)
@@ -101,12 +101,12 @@ fn make_request(
 pub fn delete_stream(
   js: JetstreamContext,
   stream: String,
-) -> Result(stream_api.StreamDeleteResponse, JetstreamError) {
-  use msg <- make_request(js, stream_api.stream_delete_request(stream))
+) -> Result(jetstream_api.StreamDeleteResponse, JetstreamError) {
+  use msg <- make_request(js, jetstream_api.stream_delete_request(stream))
   use decoded_result <- result.try(decode_response(
     js,
     msg,
-    stream_api.stream_delete_response_decoder(),
+    jetstream_api.stream_delete_response_decoder(),
   ))
   decoded_result
   |> result.map_error(map_api_error)
@@ -117,13 +117,13 @@ pub fn create_consumer(
   stream stream: String,
   description description: Option(String),
   consumer_name consumer_name: String,
-  deliver_policy deliver_policy: stream_api.DeliverPolicy,
-  ack_policy ack_policy: stream_api.AckPolicy,
-  replay_policy replay_policy: stream_api.ReplayPolicy,
-) -> Result(stream_api.ConsumerCreateResponse, JetstreamError) {
+  deliver_policy deliver_policy: jetstream_api.DeliverPolicy,
+  ack_policy ack_policy: jetstream_api.AckPolicy,
+  replay_policy replay_policy: jetstream_api.ReplayPolicy,
+) -> Result(jetstream_api.ConsumerCreateResponse, JetstreamError) {
   use msg <- make_request(
     js,
-    stream_api.consumer_create_request(
+    jetstream_api.consumer_create_request(
       stream,
       description,
       consumer_name,
@@ -135,7 +135,7 @@ pub fn create_consumer(
   use decoded_result <- result.try(decode_response(
     js,
     msg,
-    stream_api.consumer_create_response_decoder(),
+    jetstream_api.consumer_create_response_decoder(),
   ))
   decoded_result
   |> result.map_error(map_api_error)
@@ -148,7 +148,7 @@ pub fn pull_next_messages(
 ) -> Result(List(nuts.NatsMessage), JetstreamError) {
   use msg <- make_request(
     js,
-    stream_api.consumer_pull_next_messages(
+    jetstream_api.consumer_pull_next_messages(
       stream,
       consumer_name,
       expires: Some(duration.seconds(30)),
@@ -166,7 +166,7 @@ fn decode_response(js: JetstreamContext, msg: nuts.NatsMessage, decoder) {
   |> result.map_error(ResponseDecodeError)
 }
 
-fn map_api_error(err: stream_api.StreamApiError) {
+fn map_api_error(err: jetstream_api.StreamApiError) {
   case err.err_code {
     10_059 -> StreamNotFound
     10_058 -> StreamAlreadyExistsWithDifferentConfig
@@ -177,4 +177,8 @@ fn map_api_error(err: stream_api.StreamApiError) {
         err_code: err.err_code,
       )
   }
+}
+
+pub type DeliveryInfo {
+  DeliveryInfo(stream_seq: Int, consumer_seq: Int, timestamp: Int)
 }

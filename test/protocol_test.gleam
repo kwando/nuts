@@ -106,8 +106,7 @@ pub fn parse_hmsg_with_status_code_test() {
     >>)
 
   should.equal(headers, [
-    #("Status", "408"),
-    #("Description", "No Messages"),
+    #("Nats-Status", "408 No Messages"),
   ])
 }
 
@@ -127,8 +126,7 @@ pub fn parse_hmsg_status_with_headers_test() {
     >>)
 
   should.equal(headers, [
-    #("Status", "408"),
-    #("Description", "No Messages"),
+    #("Nats-Status", "408 No Messages"),
     #("Custom", "value"),
   ])
 }

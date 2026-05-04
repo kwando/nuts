@@ -1,6 +1,6 @@
 -module(nuts_ffi).
 
--export([decode32/1, encode32/1, generate_key/1, sign/2, random_string/1]).
+-export([decode32/1, encode32/1, generate_key/1, sign/2, random_string/1, match_crlf/1]).
 
 decode32(Bin) ->
   try
@@ -41,3 +41,11 @@ sign(PrivateKey, Data) ->
 random_string(Len) ->
   base32:encode(
     crypto:strong_rand_bytes(Len)).
+
+match_crlf(Binary) ->
+  case binary:match(Binary, <<"\r\n">>) of
+    {Pos, 2} ->
+      {ok, Pos};
+    nomatch ->
+      {error, nil}
+  end.

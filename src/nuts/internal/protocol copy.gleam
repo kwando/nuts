@@ -8,34 +8,20 @@ import gleam/string
 
 const default_max_payload = 1_048_576
 
-pub type ServerInfo {
-  ServerInfo(
-    server_id: String,
-    server_name: String,
-    version: String,
-    go: String,
-    host: String,
-    port: Int,
-    headers: Bool,
-    max_payload: Int,
-    proto: Int,
-    client_id: Option(Int),
-    auth_required: Option(Bool),
-    tls_required: Option(Bool),
-    tls_verify: Option(Bool),
-    tls_available: Option(Bool),
-    connect_urls: Option(List(String)),
-    ws_connect_urls: Option(List(String)),
-    ldm: Option(Bool),
-    git_commit: Option(String),
-    jetstream: Option(Bool),
-    ip: Option(String),
-    client_ip: Option(String),
-    nonce: Option(BitArray),
-    cluster: Option(String),
-    domain: Option(String),
-  )
+const max_line_length = 4096
+
+pub type ParserConfig {
+  ParserConfig(max_payload: Int)
 }
+
+pub fn default_parser_config() -> ParserConfig {
+  ParserConfig(max_payload: default_max_payload)
+}
+
+/// NATS protocol headers are terminated by \r\n (2 bytes). When reading
+/// HMSG bodies the reported header size includes this separator, so we
+/// subtract header_line_end_size to get the actual header content length.
+const header_line_end_size = 2
 
 pub type ServerMessage {
   Info(ServerInfo)
@@ -59,7 +45,10 @@ pub type ProtocolReadResult {
   NeedsMoreData
 }
 
-pub fn parse(buffer: BitArray) -> ProtocolReadResult {
+pub fn parse(
+  buffer: BitArray,
+  config config: ParserConfig,
+) -> ProtocolReadResult {
   case buffer {
     <<"INFO ", rest:bits>> -> {
       case read_line(rest) {
@@ -75,14 +64,20 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
     <<"PING\r\n", rest:bits>> -> Continue(Ping, rest)
     <<"PONG\r\n", rest:bits>> -> Continue(Pong, rest)
     <<"+OK\r\n", rest:bits>> -> Continue(OK, rest)
-    <<"-ERR ", rest:bits>> -> {
+    <<"-ERR", rest:bits>> -> {
       case read_line(rest) {
         Error(_) -> ProtocolError("no error message provided")
         Ok(#(error, rest)) -> {
           case bit_array.to_string(error) {
             Error(_) ->
               ProtocolError("failed to convert error message to string")
-            Ok(error_message) -> Continue(ERR(error_message), rest)
+            Ok(error_message) -> {
+              let error_message = string.trim_start(error_message)
+              case error_message {
+                "" -> ProtocolError("empty error message")
+                _ -> Continue(ERR(error_message), rest)
+              }
+            }
           }
         }
       }
@@ -90,35 +85,20 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
     <<"MSG ", rest:bits>> -> {
       case read_line(rest) {
         Ok(#(line, rest)) -> {
-          let assert Ok(line) = bit_array.to_string(line)
+          use line <- convert_to_string(line)
 
-          case string.split(line, " ") {
-            [topic, sid, byte_size] -> {
+          case parse_msg_fields(string.split(line, " ")) {
+            Ok(#(topic, sid, reply_to, byte_size)) -> {
               use byte_size <- with_int(byte_size)
-              case read_body(rest, byte_size, default_max_payload) {
-                BodyReadSuccess(payload, rest) -> {
-                  Continue(Msg(topic:, sid:, payload:, reply_to: None), rest)
-                }
+              case read_body(rest, byte_size, config.max_payload) {
+                BodyReadSuccess(payload, rest) ->
+                  Continue(Msg(topic:, sid:, payload:, reply_to:), rest)
                 BodyReadFail -> ProtocolError("malformed body")
                 BodyTooShort -> NeedsMoreData
                 OverMaxPayload -> ProtocolError("payload over max_payload")
               }
             }
-            [topic, sid, reply_to, byte_size] -> {
-              use byte_size <- with_int(byte_size)
-              case read_body(rest, byte_size, default_max_payload) {
-                BodyReadSuccess(payload, rest) -> {
-                  Continue(
-                    Msg(topic:, sid:, payload:, reply_to: Some(reply_to)),
-                    rest,
-                  )
-                }
-                BodyReadFail -> ProtocolError("malformed body")
-                BodyTooShort -> NeedsMoreData
-                OverMaxPayload -> ProtocolError("payload over max_payload")
-              }
-            }
-            _ -> ProtocolError("bad message")
+            Error(_) -> ProtocolError("bad message")
           }
         }
         Error(..) -> NeedsMoreData
@@ -128,19 +108,26 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
       case read_line(rest) {
         Error(_) -> NeedsMoreData
         Ok(#(line, rest)) -> {
-          let assert Ok(line) = bit_array.to_string(line)
-          case string.split(line, " ") {
-            [topic, sid, reply_to, header_bytes, total_bytes] -> {
+          use line <- convert_to_string(line)
+
+          case parse_hmsg_fields(string.split(line, " ")) {
+            Ok(#(topic, sid, reply_to, header_bytes, total_bytes)) -> {
               use header_bytes <- with_int(header_bytes)
               use total_bytes <- with_int(total_bytes)
 
-              case read_body(rest, header_bytes - 2, default_max_payload) {
+              case
+                read_body(
+                  rest,
+                  header_bytes - header_line_end_size,
+                  config.max_payload,
+                )
+              {
                 BodyReadSuccess(headers, rest) -> {
                   case
                     read_body(
                       rest,
                       total_bytes - header_bytes,
-                      default_max_payload,
+                      config.max_payload,
                     )
                   {
                     BodyReadSuccess(body, rest) -> {
@@ -152,7 +139,7 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
                               sid:,
                               headers:,
                               payload: body,
-                              reply_to: Some(reply_to),
+                              reply_to:,
                             ),
                             rest,
                           )
@@ -169,52 +156,34 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
                 OverMaxPayload -> ProtocolError("payload over max_payload")
               }
             }
-            [topic, sid, header_bytes, total_bytes] -> {
-              use header_bytes <- with_int(header_bytes)
-              use total_bytes <- with_int(total_bytes)
-
-              case read_body(rest, header_bytes - 2, default_max_payload) {
-                BodyReadSuccess(headers, rest) -> {
-                  case
-                    read_body(
-                      rest,
-                      total_bytes - header_bytes,
-                      default_max_payload,
-                    )
-                  {
-                    BodyReadSuccess(body, rest) -> {
-                      case parse_headers(headers) {
-                        Ok(headers) ->
-                          Continue(
-                            Hmsg(
-                              topic:,
-                              sid:,
-                              headers:,
-                              payload: body,
-                              reply_to: None,
-                            ),
-                            rest,
-                          )
-                        Error(_) -> ProtocolError("malformed headers")
-                      }
-                    }
-                    BodyReadFail -> ProtocolError("malformed body")
-                    BodyTooShort -> NeedsMoreData
-                    OverMaxPayload -> ProtocolError("payload over max_payload")
-                  }
-                }
-                BodyReadFail -> ProtocolError("failed to read headers")
-                BodyTooShort -> NeedsMoreData
-                OverMaxPayload -> ProtocolError("payload over max_payload")
-              }
-            }
-            x -> ProtocolError("invalid HMSG: " <> string.inspect(x))
+            Error(_) -> ProtocolError("invalid HMSG")
           }
         }
       }
     }
-    <<>> -> NeedsMoreData
-    msg -> ProtocolError("unhandled protocol message: " <> string.inspect(msg))
+    data -> {
+      case has_crlf(data) {
+        True -> ProtocolError("invalid command")
+        False -> NeedsMoreData
+      }
+    }
+  }
+}
+
+fn convert_to_string(
+  bits: BitArray,
+  next: fn(String) -> ProtocolReadResult,
+) -> ProtocolReadResult {
+  case bit_array.to_string(bits) {
+    Ok(str) -> next(str)
+    Error(_) -> ProtocolError("line is not a valid string")
+  }
+}
+
+fn has_crlf(buffer: BitArray) {
+  case find_crlf(buffer) {
+    Ok(_) -> True
+    Error(Nil) -> bit_array.byte_size(buffer) >= max_line_length
   }
 }
 
@@ -225,6 +194,29 @@ fn with_int(
   case int.parse(input) {
     Error(_) -> ProtocolError("bad integer")
     Ok(value) -> callback(value)
+  }
+}
+
+fn parse_msg_fields(
+  fields: List(String),
+) -> Result(#(String, String, Option(String), String), Nil) {
+  case fields {
+    [topic, sid, byte_size] -> Ok(#(topic, sid, None, byte_size))
+    [topic, sid, reply_to, byte_size] ->
+      Ok(#(topic, sid, Some(reply_to), byte_size))
+    _ -> Error(Nil)
+  }
+}
+
+fn parse_hmsg_fields(
+  fields: List(String),
+) -> Result(#(String, String, Option(String), String, String), Nil) {
+  case fields {
+    [topic, sid, reply_to, header_bytes, total_bytes] ->
+      Ok(#(topic, sid, Some(reply_to), header_bytes, total_bytes))
+    [topic, sid, header_bytes, total_bytes] ->
+      Ok(#(topic, sid, None, header_bytes, total_bytes))
+    _ -> Error(Nil)
   }
 }
 
@@ -294,6 +286,35 @@ fn read_body(buffer: BitArray, bytes_to_read: Int, max_payload: Int) {
         }
       }
   }
+}
+
+pub type ServerInfo {
+  ServerInfo(
+    server_id: String,
+    server_name: String,
+    version: String,
+    go: String,
+    host: String,
+    port: Int,
+    headers: Bool,
+    max_payload: Int,
+    proto: Int,
+    client_id: Option(Int),
+    auth_required: Option(Bool),
+    tls_required: Option(Bool),
+    tls_verify: Option(Bool),
+    tls_available: Option(Bool),
+    connect_urls: Option(List(String)),
+    ws_connect_urls: Option(List(String)),
+    ldm: Option(Bool),
+    git_commit: Option(String),
+    jetstream: Option(Bool),
+    ip: Option(String),
+    client_ip: Option(String),
+    nonce: Option(BitArray),
+    cluster: Option(String),
+    domain: Option(String),
+  )
 }
 
 fn server_info_decoder() -> decode.Decoder(ServerInfo) {

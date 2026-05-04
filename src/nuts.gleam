@@ -249,7 +249,6 @@ fn handle_message(
   state: ClientState,
   msg: Message,
 ) -> actor.Next(ClientState, a) {
-  echo #(msg, state.socket)
   case msg {
     Connect -> {
       case state.socket {
@@ -570,7 +569,7 @@ fn handle_server_message(
             send_bits(
               state,
               command.encode_connect(ConnectOptions(
-                verbose: True,
+                verbose: False,
                 pedantic: True,
                 tls_required: False,
                 lang: "gleam",
@@ -693,7 +692,7 @@ fn broadcast_message(
 fn get_status(headers: List(#(String, String))) -> Option(String) {
   case headers {
     [] -> None
-    [#("Status", status), ..] -> Some(status)
+    [#("Nats-Status", status), ..] -> Some(status)
     [_, ..rest] -> get_status(rest)
   }
 }
@@ -703,7 +702,6 @@ fn setup_connection(state: ClientState) {
     "setup connection " <> int.to_string(state.connection_attempt),
   )
   assert state.socket == None as "cant reconnect when there is an open socket"
-  process.sleep(200)
 
   let socket =
     mug.new(state.options.host, state.options.port)
