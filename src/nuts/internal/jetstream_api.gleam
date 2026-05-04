@@ -39,8 +39,16 @@ pub fn stream_names_response_decoder() -> Decoder(StreamNamesResponse) {
   use total <- decode.field("total", decode.int)
   use offset <- decode.field("offset", decode.int)
   use limit <- decode.field("limit", decode.int)
-  use streams <- decode.field("streams", decode.list(decode.string))
-  decode.success(StreamNamesResponse(total:, offset:, limit:, streams:))
+  use streams <- decode.field(
+    "streams",
+    decode.optional(decode.list(decode.string)),
+  )
+  decode.success(StreamNamesResponse(
+    total:,
+    offset:,
+    limit:,
+    streams: option.unwrap(streams, []),
+  ))
 }
 
 pub fn stream_get_info_request(
