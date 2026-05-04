@@ -43,7 +43,7 @@ pub fn from_seed(seed: String) -> Result(KeyPair, NkeyError) {
   )
   use <- bool.guard(
     when: bit_array.byte_size(bin) < 32,
-    return: Error(NkeyError("key is too shoort")),
+    return: Error(NkeyError("key is too short")),
   )
 
   let size = bit_array.byte_size(bin)

@@ -137,7 +137,7 @@ pub fn start(
               }
 
               Error(_) -> {
-                io.println_error("unexpected messafe: " <> string.inspect(msg))
+                io.println_error("unexpected message: " <> string.inspect(msg))
                 state
               }
             }
