@@ -53,13 +53,15 @@ pub fn consumer_test() {
   let assert Ok(_) =
     jetstream.create_consumer(
       conn,
-      description: None,
       stream: "my_stream",
       consumer_name:,
-      deliver_policy: jetstream_api.All,
-      ack_policy: jetstream_api.AckExplicit,
-      replay_policy: jetstream_api.Instant,
-      max_deliver: 10,
+      config: jetstream_api.ConsumerConfig(
+        description: None,
+        deliver_policy: jetstream_api.All,
+        ack_policy: jetstream_api.AckExplicit,
+        replay_policy: jetstream_api.Instant,
+        max_deliver: 10,
+      ),
     )
 
   let gen = friendly_id.new_generator()

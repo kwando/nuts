@@ -1,7 +1,7 @@
 import gleam/bit_array
 import gleam/erlang/process.{type Subject}
 import gleam/json
-import gleam/option.{type Option, None}
+import gleam/option.{None}
 import gleam/result
 import gleam/string
 import nuts
@@ -114,24 +114,12 @@ pub fn delete_stream(
 pub fn create_consumer(
   js: JetstreamContext,
   stream stream: String,
-  description description: Option(String),
   consumer_name consumer_name: String,
-  deliver_policy deliver_policy: jetstream_api.DeliverPolicy,
-  ack_policy ack_policy: jetstream_api.AckPolicy,
-  replay_policy replay_policy: jetstream_api.ReplayPolicy,
-  max_deliver max_deliver: Int,
+  config config: jetstream_api.ConsumerConfig,
 ) -> Result(jetstream_api.ConsumerCreateResponse, JetstreamError) {
   use msg <- make_request(
     js,
-    jetstream_api.consumer_create_request(
-      stream,
-      description,
-      consumer_name,
-      deliver_policy,
-      ack_policy,
-      replay_policy,
-      max_deliver,
-    ),
+    jetstream_api.consumer_create_request(stream:, consumer_name:, config:),
   )
   use decoded_result <- result.try(decode_response(
     js,

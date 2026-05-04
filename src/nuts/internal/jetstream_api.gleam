@@ -274,14 +274,20 @@ fn replay_policy_to_json(replay_policy: ReplayPolicy) -> json.Json {
   }
 }
 
+pub type ConsumerConfig {
+  ConsumerConfig(
+    description: Option(String),
+    deliver_policy: DeliverPolicy,
+    ack_policy: AckPolicy,
+    replay_policy: ReplayPolicy,
+    max_deliver: Int,
+  )
+}
+
 pub fn consumer_create_request(
   stream stream: String,
-  description description: Option(String),
   consumer_name consumer_name: String,
-  deliver_policy deliver_policy: DeliverPolicy,
-  ack_policy ack_policy: AckPolicy,
-  replay_policy replay_policy: ReplayPolicy,
-  max_deliver max_deliver: Int,
+  config config: ConsumerConfig,
 ) -> nuts.NatsMessage {
   nuts.NatsMessage(
     subject: "$JS.API.CONSUMER.CREATE." <> stream <> "." <> consumer_name,
@@ -294,12 +300,12 @@ pub fn consumer_create_request(
           "config",
           json.object(
             [
-              #("ack_policy", ack_policy_to_json(ack_policy)),
-              #("replay_policy", replay_policy_to_json(replay_policy)),
-              #("max_deliver", json.int(max_deliver)),
-              ..deliver_policy_to_json(deliver_policy)
+              #("ack_policy", ack_policy_to_json(config.ack_policy)),
+              #("replay_policy", replay_policy_to_json(config.replay_policy)),
+              #("max_deliver", json.int(config.max_deliver)),
+              ..deliver_policy_to_json(config.deliver_policy)
             ]
-            |> optional_field("description", description, json.string),
+            |> optional_field("description", config.description, json.string),
           ),
         ),
       ]),
