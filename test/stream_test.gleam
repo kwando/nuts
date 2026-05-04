@@ -188,6 +188,75 @@ fn producer_loop(conn: Subject(Message), subject: String, sleep: Int, gen) {
   producer_loop(conn, subject, sleep, gen)
 }
 
-pub fn main() {
-  consumer_test()
+pub fn stream_publish_test() {
+  // Spawn a temporary NATS server with JetStream enabled on a random port.
+  use port <- test_utils.with_nats_server()
+  let assert Ok(actor.Started(_, conn)) =
+    nats.new("127.0.0.1", port)
+    |> nats.start()
+
+  assert test_utils.await_connected(conn, 100)
+  let js = jetstream.new_context(conn)
+
+  // Create a memory-backed stream that captures messages on the "pub.test" subject.
+  let stream_config =
+    jetstream_api.StreamCreateRequest(
+      stream_name: "pub_test_stream",
+      description: None,
+      subjects: ["pub.test"],
+      retention: jetstream_api.Limits,
+      max_consumers: -1,
+      max_msgs: -1,
+      max_bytes: -1,
+      max_age: 0,
+      storage: jetstream_api.Memory,
+      num_replicas: 1,
+      discard_policy: jetstream_api.DiscardOld,
+    )
+  let assert Ok(_) = jetstream.create_stream(js, stream_config)
+
+  // Test 1: Basic synchronous publish.
+  // jetstream.publish sends the message and waits for a PubAck from the server.
+  // The response tells us which stream stored the message and the assigned sequence number.
+  let assert Ok(ack) =
+    jetstream.publish(
+      js,
+      "pub.test",
+      <<"hello">>,
+      jetstream.default_publish_options(),
+    )
+  assert ack.stream == "pub_test_stream"
+  assert ack.seq == 1
+  assert ack.duplicate == False
+
+  // Test 2: Message deduplication via the Nats-Msg-Id header.
+  // When two publishes carry the same msg_id within the stream's duplicate window,
+  // JetStream stores the first and rejects the second as a duplicate.
+  let dedup_opts =
+    jetstream.PublishOptions(
+      ..jetstream.default_publish_options(),
+      msg_id: Some("my-msg-id"),
+    )
+  let assert Ok(ack2) =
+    jetstream.publish(js, "pub.test", <<"hello2">>, dedup_opts)
+  assert ack2.seq == 2
+  assert ack2.duplicate == False
+
+  let assert Ok(ack3) =
+    jetstream.publish(js, "pub.test", <<"hello2">>, dedup_opts)
+  assert ack3.duplicate == True
+
+  // Test 3: Optimistic concurrency control using expected_last_seq.
+  // The server rejects the publish if the stream's current sequence does not match
+  // the expected value. Here we deliberately pass a stale sequence (999) to force a failure.
+  let bad_opts =
+    jetstream.PublishOptions(
+      ..jetstream.default_publish_options(),
+      expected_last_seq: Some(999),
+    )
+  let assert Error(jetstream.WrongLastSequence) =
+    jetstream.publish(js, "pub.test", <<"hello3">>, bad_opts)
+
+  // Clean up: remove the test stream so the test is self-contained.
+  let assert Ok(_) = jetstream.delete_stream(js, "pub_test_stream")
 }

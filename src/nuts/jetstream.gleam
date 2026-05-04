@@ -1,7 +1,8 @@
 import gleam/bit_array
 import gleam/erlang/process.{type Subject}
+import gleam/int
 import gleam/json
-import gleam/option.{None}
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import nuts
@@ -33,6 +34,9 @@ pub type JetstreamError {
   StreamNotFound
   StreamAlreadyExistsWithDifferentConfig
   ConsumerNotFound
+  WrongLastSequence
+  WrongLastSubjectSequence
+  MessageTooLarge
 }
 
 pub fn list_stream_names(
@@ -193,12 +197,102 @@ fn map_api_error(err: jetstream_api.StreamApiError) {
     10_059 -> StreamNotFound
     10_058 -> StreamAlreadyExistsWithDifferentConfig
     10_014 -> ConsumerNotFound
+    10_071 -> WrongLastSequence
+    10_072 -> WrongLastSubjectSequence
+    10_074 -> MessageTooLarge
     _ ->
       ApiError(
         code: err.code,
         description: err.description,
         err_code: err.err_code,
       )
+  }
+}
+
+pub type PublishOptions {
+  PublishOptions(
+    msg_id: Option(String),
+    expected_stream: Option(String),
+    expected_last_seq: Option(Int),
+    expected_last_subject_seq: Option(Int),
+    timeout: Option(Int),
+  )
+}
+
+pub fn default_publish_options() -> PublishOptions {
+  PublishOptions(
+    msg_id: None,
+    expected_stream: None,
+    expected_last_seq: None,
+    expected_last_subject_seq: None,
+    timeout: None,
+  )
+}
+
+pub fn publish(
+  js: JetstreamContext,
+  subject: String,
+  payload: BitArray,
+  options: PublishOptions,
+) -> Result(jetstream_api.PubAck, JetstreamError) {
+  let headers =
+    []
+    |> add_optional_header("Nats-Msg-Id", options.msg_id)
+    |> add_optional_header("Nats-Expected-Stream", options.expected_stream)
+    |> add_optional_int_header(
+      "Nats-Expected-Last-Sequence",
+      options.expected_last_seq,
+    )
+    |> add_optional_int_header(
+      "Nats-Expected-Last-Subject-Sequence",
+      options.expected_last_subject_seq,
+    )
+
+  let message = nuts.NatsMessage(subject:, reply_to: None, headers:, payload:)
+
+  let timeout = option.unwrap(options.timeout, js.request_timeout)
+
+  use msg <- make_request_with_timeout(js, message, timeout)
+  use decoded_result <- result.try(decode_response(
+    js,
+    msg,
+    jetstream_api.pub_ack_decoder(),
+  ))
+  decoded_result
+  |> result.map_error(map_api_error)
+}
+
+fn add_optional_header(
+  headers: List(#(String, String)),
+  key: String,
+  value: Option(String),
+) -> List(#(String, String)) {
+  case value {
+    Some(v) -> [#(key, v), ..headers]
+    None -> headers
+  }
+}
+
+fn add_optional_int_header(
+  headers: List(#(String, String)),
+  key: String,
+  value: Option(Int),
+) -> List(#(String, String)) {
+  case value {
+    Some(v) -> [#(key, int.to_string(v)), ..headers]
+    None -> headers
+  }
+}
+
+fn make_request_with_timeout(
+  js: JetstreamContext,
+  msg: nuts.NatsMessage,
+  timeout: Int,
+  next: fn(nuts.NatsMessage) -> Result(a, JetstreamError),
+) -> Result(a, JetstreamError) {
+  case nuts.request(js.conn, msg, timeout) {
+    Ok(response) -> next(response)
+    Error(err) -> Error(ConnectionError(err))
   }
 }
 

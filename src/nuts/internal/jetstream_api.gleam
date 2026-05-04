@@ -276,6 +276,18 @@ pub type StreamCreateResponse {
   StreamCreated(name: String)
 }
 
+pub type PubAck {
+  PubAck(stream: String, seq: Int, duplicate: Bool)
+}
+
+pub fn pub_ack_decoder() -> Decoder(Result(PubAck, StreamApiError)) {
+  use <- decode_stream_api_error()
+  use stream <- decode.field("stream", decode.string)
+  use seq <- decode.field("seq", decode.int)
+  use duplicate <- decode.optional_field("duplicate", False, decode.bool)
+  decode.success(Ok(PubAck(stream:, seq:, duplicate:)))
+}
+
 pub type DeliverPolicy {
   All
   New
