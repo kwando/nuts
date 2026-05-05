@@ -12,7 +12,7 @@ import gleam_community/ansi
 import nuts.{type Message} as nats
 import nuts/internal/jetstream_api.{type DeliveryInfo}
 import nuts/jetstream
-import nuts/simple_consumer
+import nuts/jetstream/simple_consumer
 import nuts/test_utils
 
 pub fn consumer_test() {

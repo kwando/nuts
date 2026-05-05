@@ -31,3 +31,7 @@ dev:
     tmux send-keys -t "${session_name}:1.0" 'just test_watch' C-m
 
     tmux attach-session -t "${session_name}:0"
+
+serve_docs:
+    gleam docs build
+    caddy file-server --root build/dev/docs/nuts --browse

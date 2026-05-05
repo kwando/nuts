@@ -1,6 +1,6 @@
 import gleam/bit_array
 import gleam/json
-import nuts/nkey
+import nuts/internal/nkey
 
 pub type Auth {
   NoAuth

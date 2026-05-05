@@ -12,8 +12,8 @@ import gleam/result
 import gleam/string
 import gleam/uri
 import mug
-import nuts/connect_options.{ConnectOptions}
 import nuts/internal/command
+import nuts/internal/connect_options.{ConnectOptions}
 import nuts/internal/protocol.{type ServerInfo}
 
 @external(erlang, "nuts_ffi", "random_string")

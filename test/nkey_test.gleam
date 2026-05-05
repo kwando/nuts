@@ -1,5 +1,5 @@
 import gleam/bit_array
-import nuts/nkey
+import nuts/internal/nkey
 
 const seed = "SUALHP366GCQN53R7X3MJF4BCNEK6WTKATRZ7QAMDC7UTVBMC2WYUDKK64"
 

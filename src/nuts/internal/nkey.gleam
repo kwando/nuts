@@ -89,7 +89,7 @@ pub fn crc(input: BitArray) {
   crc_loop(input, 0)
 }
 
-pub fn crc_loop(input: BitArray, crc: Int) {
+fn crc_loop(input: BitArray, crc: Int) {
   case input {
     <<>> -> crc
     <<byte, rest:bits>> -> {

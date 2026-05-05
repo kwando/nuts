@@ -2,7 +2,7 @@ import gleam/bit_array
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import nuts/connect_options.{type ConnectOptions}
+import nuts/internal/connect_options.{type ConnectOptions}
 
 pub fn encode_ping() {
   <<"PING\r\n">>
