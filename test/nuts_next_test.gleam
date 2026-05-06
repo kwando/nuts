@@ -223,7 +223,3 @@ pub fn ping_keeps_connection_alive_test() {
   assert nats.is_connected(conn)
     as "connection should still be alive after ping interval"
 }
-
-pub fn main() {
-  invalid_user_pass_authorization_test()
-}

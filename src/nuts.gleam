@@ -128,6 +128,32 @@ pub opaque type Message {
   Shutdown(Subject(Nil))
 }
 
+type Responder {
+  Responder(
+    subject: Subject(Result(NatsMessage, NatsError)),
+    timeout_timer: process.Timer,
+  )
+}
+
+type ClientState {
+  ClientState(
+    options: Options,
+    socket: Option(mug.Socket),
+    buffer: BitArray,
+    server_info: Option(ServerInfo),
+    subscribers: SubscriberMap,
+    next_sid: Int,
+    self: Subject(Message),
+    logger: Logger,
+    connection_attempt: Int,
+    inbox_prefix: String,
+    response_map: Dict(String, Responder),
+    ping_timer: Option(process.Timer),
+    pong_timeout_timer: Option(process.Timer),
+    authorized: Bool,
+  )
+}
+
 type Subscriber {
   Subscriber(
     sid: String,
@@ -197,30 +223,6 @@ fn update_subscribers(
 }
 
 //------------------------------------------- NatsConnection -------------------------------------------
-type Responder {
-  Responder(
-    subject: Subject(Result(NatsMessage, NatsError)),
-    timeout_timer: process.Timer,
-  )
-}
-
-type ClientState {
-  ClientState(
-    options: Options,
-    socket: Option(mug.Socket),
-    buffer: BitArray,
-    server_info: Option(ServerInfo),
-    subscribers: SubscriberMap,
-    next_sid: Int,
-    self: Subject(Message),
-    logger: Logger,
-    connection_attempt: Int,
-    inbox_prefix: String,
-    response_map: Dict(String, Responder),
-    ping_timer: Option(process.Timer),
-    pong_timeout_timer: Option(process.Timer),
-  )
-}
 
 pub fn start(options: Options) {
   actor.new_with_initialiser(actor_timeout, fn(self) {
@@ -240,6 +242,7 @@ pub fn start(options: Options) {
       inbox_prefix: new_inbox_prefix(),
       ping_timer: None,
       pong_timeout_timer: None,
+      authorized: False,
     ))
     |> actor.selecting(
       process.new_selector()
@@ -296,7 +299,7 @@ fn handle_message(
       }
     }
     IsConnected(reply) -> {
-      actor.send(reply, state.socket != None && state.server_info != None)
+      actor.send(reply, state.authorized)
       actor.continue(state)
     }
     Publish(msg, reply) -> handle_publish(state, msg, reply)
@@ -553,7 +556,7 @@ fn close_connection(state: ClientState) {
     Some(socket) -> {
       let _ = mug.shutdown(socket)
 
-      ClientState(..state, socket: None, server_info: None)
+      ClientState(..state, socket: None, server_info: None, authorized: False)
       |> schedule_reconnect
     }
     None -> state
@@ -561,6 +564,8 @@ fn close_connection(state: ClientState) {
 }
 
 fn schedule_reconnect(state: ClientState) {
+  let ms = next_reconnect(state.connection_attempt)
+  state.logger.debug("scheduling reconnect in " <> int.to_string(ms) <> "ms")
   process.send_after(
     state.self,
     next_reconnect(state.connection_attempt),
@@ -653,9 +658,17 @@ fn handle_server_message(
             )
           {
             Ok(_) -> {
-              ClientState(..state, server_info: Some(server_info))
-              |> resubscribe
-              |> result.map(schedule_ping)
+              case send_bits(state, command.encode_ping()) {
+                Ok(_) -> {
+                  ClientState(
+                    ..state,
+                    server_info: Some(server_info),
+                    authorized: False,
+                  )
+                  |> Ok
+                }
+                Error(err) -> Error(err)
+              }
             }
             Error(err) -> Error(err)
           }
@@ -676,11 +689,22 @@ fn handle_server_message(
         Error(err) -> Error(err)
       }
     }
-    protocol.Pong ->
-      state
-      |> cancel_pong_timeout
-      |> schedule_ping
-      |> Ok
+
+    protocol.Pong -> {
+      let state =
+        state
+        |> cancel_pong_timeout
+        |> schedule_ping
+      case state.authorized {
+        True -> Ok(state)
+
+        False -> {
+          ClientState(..state, authorized: True)
+          |> resubscribe()
+        }
+      }
+    }
+
     protocol.Msg(topic:, sid:, reply_to:, payload:) -> {
       broadcast_message(
         state,
