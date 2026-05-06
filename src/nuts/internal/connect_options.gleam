@@ -5,6 +5,7 @@ import nuts/internal/nkey
 pub type Auth {
   NoAuth
   NKeyAuth(public: String, signature: String)
+  UserPassAuth(user: String, pass: String)
 }
 
 pub type ConnectOptions {
@@ -56,6 +57,11 @@ fn append_auth(opts, auth: Auth) {
     NKeyAuth(public:, signature:) -> [
       #("nkey", json.string(public)),
       #("sig", json.string(signature)),
+      ..opts
+    ]
+    UserPassAuth(user:, pass:) -> [
+      #("user", json.string(user)),
+      #("pass", json.string(pass)),
       ..opts
     ]
     NoAuth -> opts

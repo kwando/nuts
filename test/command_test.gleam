@@ -1,5 +1,26 @@
 import gleam/option.{None, Some}
+import gleam/string
 import nuts/internal/command
+import nuts/internal/connect_options.{ConnectOptions, UserPassAuth}
+
+pub fn connect_with_user_pass_test() {
+  let json =
+    connect_options.to_json_string(ConnectOptions(
+      verbose: False,
+      pedantic: True,
+      tls_required: False,
+      lang: "gleam",
+      version: "0.0.1",
+      headers: True,
+      protocol: 0,
+      auth: UserPassAuth(user: "alice", pass: "secret"),
+      name: "nuts",
+      no_responders: True,
+    ))
+
+  assert string.contains(json, "\"user\":\"alice\"")
+  assert string.contains(json, "\"pass\":\"secret\"")
+}
 
 pub fn hpub_test() {
   assert command.encode_hpub(

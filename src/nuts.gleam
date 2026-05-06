@@ -27,6 +27,8 @@ pub opaque type Options {
     host: String,
     port: Int,
     nkey_seed: Option(String),
+    username: Option(String),
+    password: Option(String),
     ping_interval: Int,
     ping_timeout: Int,
     logger: Logger,
@@ -39,6 +41,8 @@ pub fn new(host: String, port: Int) -> Options {
     host:,
     port:,
     nkey_seed: None,
+    username: None,
+    password: None,
     ping_interval: 30_000,
     ping_timeout: 10_000,
     logger: noop_logger(),
@@ -48,6 +52,14 @@ pub fn new(host: String, port: Int) -> Options {
 
 pub fn nkey_seed(options: Options, string: String) -> Options {
   Options(..options, nkey_seed: Some(string))
+}
+
+pub fn username(options: Options, string: String) -> Options {
+  Options(..options, username: Some(string))
+}
+
+pub fn password(options: Options, string: String) -> Options {
+  Options(..options, password: Some(string))
 }
 
 pub fn with_logger(options: Options, logger: Logger) {
@@ -330,6 +342,7 @@ fn handle_socket_data(
               )
 
               state
+              |> increment_connection_attempts
               |> close_connection
               |> actor.continue
             }
@@ -540,13 +553,8 @@ fn close_connection(state: ClientState) {
     Some(socket) -> {
       let _ = mug.shutdown(socket)
 
-      ClientState(
-        ..state,
-        socket: None,
-        server_info: None,
-        connection_attempt: 1,
-      )
-      |> setup_connection
+      ClientState(..state, socket: None, server_info: None)
+      |> schedule_reconnect
     }
     None -> state
   }
@@ -623,10 +631,7 @@ fn handle_server_message(
   state.logger.debug("<< " <> string.inspect(message))
   case message {
     protocol.Info(server_info) -> {
-      let auth = case state.options.nkey_seed, server_info.nonce {
-        Some(nkey), Some(nonce) -> connect_options.nkey_auth(nkey, nonce)
-        _, _ -> Ok(connect_options.NoAuth)
-      }
+      let auth = build_auth(state, server_info)
 
       case auth {
         Ok(auth) -> {
@@ -662,7 +667,11 @@ fn handle_server_message(
       }
     }
     protocol.Ping -> {
-      case send_bits(state, command.encode_pong()) {
+      case
+        state
+        |> reset_connection_attempts
+        |> send_bits(command.encode_pong())
+      {
         Ok(_) -> Ok(state)
         Error(err) -> Error(err)
       }
@@ -689,6 +698,35 @@ fn handle_server_message(
     protocol.OK -> Ok(state)
     protocol.ERR(error) -> Error(ProtocolError(error))
   }
+}
+
+fn build_auth(
+  state: ClientState,
+  server_info: ServerInfo,
+) -> Result(connect_options.Auth, _) {
+  case state.options.nkey_seed, server_info.nonce {
+    Some(nkey), Some(nonce) -> connect_options.nkey_auth(nkey, nonce)
+    _, _ -> {
+      case state.options.username {
+        Some(user) ->
+          Ok(connect_options.UserPassAuth(
+            user:,
+            pass: option.unwrap(state.options.password, ""),
+          ))
+        None -> Ok(connect_options.NoAuth)
+      }
+    }
+  }
+}
+
+fn reset_connection_attempts(state: ClientState) {
+  state.logger.debug("reset connection attempts")
+  ClientState(..state, connection_attempt: 1)
+}
+
+fn increment_connection_attempts(state: ClientState) {
+  state.logger.debug("increment connection attempts")
+  ClientState(..state, connection_attempt: state.connection_attempt + 1)
 }
 
 fn resubscribe(state: ClientState) -> Result(ClientState, NatsError) {
@@ -786,7 +824,7 @@ fn setup_connection(state: ClientState) {
         <> ":"
         <> int.to_string(state.options.port),
       )
-      ClientState(..state, socket: Some(socket), connection_attempt: 1)
+      ClientState(..state, socket: Some(socket))
     }
     Error(err) -> {
       state.logger.warning("failed to connect: " <> string.inspect(err))

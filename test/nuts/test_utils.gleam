@@ -42,6 +42,42 @@ pub fn with_nats_server(callback: fn(Int) -> a) -> a {
   with_nats_server_on_port(port, fn() { callback(port) })
 }
 
+pub fn with_nats_server_with_auth(
+  user: String,
+  pass: String,
+  callback: fn(Int) -> a,
+) -> a {
+  let port = int.random(5000) + 30_000
+  let self = process.new_subject()
+  let assert Ok(server) =
+    child_process.from_file("/opt/homebrew/bin/nats-server")
+    |> child_process.arg2("--port", int.to_string(port))
+    |> child_process.arg2("--user", user)
+    |> child_process.arg2("--pass", pass)
+    |> child_process.arg("--jetstream")
+    |> child_process.arg2("--store_dir", "/tmp/jetstream")
+    |> child_process.arg("-D")
+    |> child_process.spawn(
+      stdio.lines(fn(line) {
+        case string.contains(line, "Listening for client connections") {
+          False -> Nil
+          True -> process.send(self, True)
+        }
+        Nil
+      }),
+    )
+
+  let assert Ok(_) = process.receive(self, 2000)
+  exception.defer(
+    fn() {
+      child_process.stop(server)
+      child_process.kill(server)
+      let _ = simplifile.delete("/tmp/jetstream")
+    },
+    fn() { callback(port) },
+  )
+}
+
 pub fn await_connected(subject: process.Subject(nats.Message), attempts: Int) {
   use <- bool.guard(when: attempts == 0, return: False)
   case nats.is_connected(subject) {

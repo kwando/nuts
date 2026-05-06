@@ -62,6 +62,28 @@ pub fn nkey_authorization_test() {
   assert test_utils.await_connected(nats_conn, 5) as "not connected to NATS"
 }
 
+pub fn user_pass_authorization_test() {
+  use port <- test_utils.with_nats_server_with_auth("alice", "secret")
+  let options =
+    nats.new("127.0.0.1", port)
+    |> nats.username("alice")
+    |> nats.password("secret")
+
+  let assert Ok(Started(_, nats_conn)) = nats.start(options)
+  assert test_utils.await_connected(nats_conn, 5) as "not connected to NATS"
+}
+
+pub fn invalid_user_pass_authorization_test() {
+  use port <- test_utils.with_nats_server_with_auth("alice", "secret")
+  let options =
+    nats.new("127.0.0.1", port)
+    |> nats.username("alice")
+    |> nats.password("wrongpassword")
+
+  let assert Ok(Started(_, nats_conn)) = nats.start(options)
+  assert !test_utils.await_connected(nats_conn, 10) as "connected to NATS"
+}
+
 pub fn reconnect_and_resubscribe_test() {
   let #(port, subscription, conn) = {
     use port <- test_utils.with_nats_server()
@@ -200,4 +222,8 @@ pub fn ping_keeps_connection_alive_test() {
 
   assert nats.is_connected(conn)
     as "connection should still be alive after ping interval"
+}
+
+pub fn main() {
+  invalid_user_pass_authorization_test()
 }
