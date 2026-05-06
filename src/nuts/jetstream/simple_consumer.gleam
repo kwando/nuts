@@ -2,7 +2,6 @@ import gleam/bit_array
 import gleam/bool
 import gleam/erlang/process.{type Subject}
 import gleam/int
-import gleam/io
 import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
@@ -10,7 +9,7 @@ import gleam/otp/actor
 import gleam/result
 import gleam/string
 import gleam/time/duration.{type Duration}
-import nuts.{type Message} as nats
+import nuts.{type Logger, type Message, type NatsMessage} as nats
 import nuts/internal/jetstream_api.{type DeliveryInfo}
 
 type ConsumerState {
@@ -19,7 +18,8 @@ type ConsumerState {
     next_poll_id: Int,
     self: Subject(ConsumerMessage),
     pending: Int,
-    handler: fn(nats.NatsMessage, DeliveryInfo) -> HandlerReply,
+    handler: fn(NatsMessage, DeliveryInfo) -> HandlerReply,
+    logger: Logger,
   )
 }
 
@@ -29,7 +29,7 @@ type PollRequest {
 
 type ConsumerMessage {
   Poll(batch: Int)
-  NatsMessage(nats.NatsMessage)
+  NatsMessage(NatsMessage)
 }
 
 pub opaque type HandlerReply {
@@ -45,7 +45,7 @@ pub fn start(
   consumer_name: String,
   max_messages: Int,
   threshold: Int,
-  handler: fn(nats.NatsMessage, DeliveryInfo) -> HandlerReply,
+  handler: fn(NatsMessage, DeliveryInfo) -> HandlerReply,
 ) -> Result(actor.Started(Nil), actor.StartError) {
   let inbox_prefix = "consumer." <> nats.random_string(10) <> "."
   actor.new_with_initialiser(1000, fn(self) {
@@ -59,6 +59,7 @@ pub fn start(
       self:,
       pending: 0,
       handler:,
+      logger: nats.default_logger("simple_consumer: "),
     ))
     |> actor.selecting(
       process.new_selector()
@@ -132,12 +133,14 @@ pub fn start(
                 }
               }
               Ok(status) -> {
-                io.println_error("unhandled status: " <> status)
+                state.logger.warning("unhandled status: " <> status)
                 state
               }
 
               Error(_) -> {
-                io.println_error("unexpected message: " <> string.inspect(msg))
+                state.logger.warning(
+                  "unexpected message: " <> string.inspect(msg),
+                )
                 state
               }
             }
