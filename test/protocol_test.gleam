@@ -1,6 +1,6 @@
 import gleam/option.{None, Some}
 import gleeunit/should
-import nuts/internal/protocol.{Continue, Hmsg, NeedsMoreData}
+import guppy/internal/protocol.{Continue, Hmsg, NeedsMoreData}
 
 pub fn parse_test() {
   protocol.parse(<<"PING\r\n">>)

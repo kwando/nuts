@@ -9,8 +9,8 @@ import gleam/otp/actor
 import gleam/result
 import gleam/string
 import gleam/time/duration.{type Duration}
-import nuts.{type Logger, type Message, type NatsMessage} as nats
-import nuts/internal/jetstream_api.{type DeliveryInfo}
+import guppy.{type Logger, type Message, type NatsMessage} as nats
+import guppy/internal/jetstream_api.{type DeliveryInfo}
 
 type ConsumerState {
   ConsumerState(

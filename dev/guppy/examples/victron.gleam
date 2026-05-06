@@ -3,18 +3,18 @@ import gleam/io
 import gleam/otp/actor
 import gleam/string
 import gleam_community/ansi
-import nuts
+import guppy
 
 pub fn main() {
   let assert Ok(actor.Started(_, conn)) =
-    nuts.start(nuts.new("100.121.244.19", 4222))
+    guppy.start(guppy.new("100.121.244.19", 4222))
 
-  let assert Ok(me) = nuts.subscribe(conn, "naboo.victron")
+  let assert Ok(me) = guppy.subscribe(conn, "naboo.victron")
 
-  loop(me |> nuts.get_subject)
+  loop(me |> guppy.get_subject)
 }
 
-fn loop(subject: process.Subject(nuts.NatsMessage)) {
+fn loop(subject: process.Subject(guppy.NatsMessage)) {
   case process.receive(subject, 1000) {
     Error(_) -> loop(subject)
     Ok(event) -> {

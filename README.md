@@ -1,37 +1,37 @@
-# nuts
+# guppy
 
 A NATS client library for Gleam, targeting the Erlang runtime.
 
-[![Package Version](https://img.shields.io/hexpm/v/nuts)](https://hex.pm/packages/nuts)
-[![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/nuts/)
+[![Package Version](https://img.shields.io/hexpm/v/guppy)](https://hex.pm/packages/guppy)
+[![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/guppy/)
 
 ```sh
-gleam add nuts@1
+gleam add guppy@1
 ```
 
 ## Quick Start
 
 ```gleam
 import gleam/erlang/process
-import nuts
+import guppy
 
 pub fn main() {
-  let assert Ok(nats) = nuts.start(nuts.new("127.0.0.1", 4222))
+  let assert Ok(nats) = guppy.start(guppy.new("127.0.0.1", 4222))
 
   // Subscribe
-  let assert Ok(sub) = nuts.subscribe(nats, "greetings")
-  let subject = nuts.get_subject(sub)
+  let assert Ok(sub) = guppy.subscribe(nats, "greetings")
+  let subject = guppy.get_subject(sub)
 
   // Publish
-  let msg = nuts.new_message("greetings", <<"hello">>)
-  nuts.publish(nats, msg)
+  let msg = guppy.new_message("greetings", <<"hello">>)
+  guppy.publish(nats, msg)
 
   // Receive
   let assert Ok(received) = process.receive(subject, 1000)
 
   // Cleanup
-  nuts.unsubscribe(nats, sub)
-  nuts.shutdown(nats)
+  guppy.unsubscribe(nats, sub)
+  guppy.shutdown(nats)
 }
 ```
 
@@ -54,24 +54,24 @@ pub fn main() {
 ```gleam
 // Send a request and wait for a response
 let assert Ok(reply) =
-  nuts.new_message("service.echo", <<"ping">>)
-  |> nuts.request(nats, _, 1000)
+  guppy.new_message("service.echo", <<"ping">>)
+  |> guppy.request(nats, _, 1000)
 ```
 
 ## NKey Authentication
 
 ```gleam
 let assert Ok(nats) =
-  nuts.new("127.0.0.1", 4222)
-  |> nuts.nkey_seed("SUALHP36...your_seed_here...")
-  |> nuts.start()
+  guppy.new("127.0.0.1", 4222)
+  |> guppy.nkey_seed("SUALHP36...your_seed_here...")
+  |> guppy.start()
 ```
 
 ## JetStream
 
 ```gleam
-import nuts/jetstream
-import nuts/jetstream_api
+import guppy/jetstream
+import guppy/jetstream_api
 
 let js = jetstream.new_context(nats)
 
@@ -106,7 +106,7 @@ let assert Ok(consumer) = jetstream.create_consumer(js,
 ## Simple Consumer
 
 ```gleam
-import nuts/simple_consumer
+import guppy/simple_consumer
 import gleam/time
 
 let assert Ok(_) = simple_consumer.start(
@@ -120,7 +120,7 @@ let assert Ok(_) = simple_consumer.start(
 )
 ```
 
-Further documentation can be found at <https://hexdocs.pm/nuts/>.
+Further documentation can be found at <https://hexdocs.pm/guppy/>.
 
 ## Development
 

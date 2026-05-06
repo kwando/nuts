@@ -257,7 +257,7 @@ fn parse_headers(headers: BitArray) {
   }
 }
 
-@external(erlang, "nuts_ffi", "match_crlf")
+@external(erlang, "guppy_ffi", "match_crlf")
 fn find_crlf(buffer: BitArray) -> Result(Int, Nil)
 
 /// Reads all bytes until it finds a CRLF

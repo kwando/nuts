@@ -3,7 +3,7 @@ start_nats:
 
 example EXAMPLE:
     @gleam run -m cog --no-print-progress
-    @gleam run -m nuts/internal/examples/{{ EXAMPLE }}  --no-print-progress
+    @gleam run -m guppy/internal/examples/{{ EXAMPLE }}  --no-print-progress
 
 test_watch:
     watchexec --clear -w src -w test "gleam test"
@@ -13,7 +13,7 @@ dev:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    session_name="nuts-dev"
+    session_name="guppy-dev"
 
     if tmux has-session -t "$session_name" 2>/dev/null; then
         tmux attach-session -t "${session_name}:0"
@@ -34,4 +34,4 @@ dev:
 
 serve_docs:
     gleam docs build
-    caddy file-server --root build/dev/docs/nuts --browse
+    caddy file-server --root build/dev/docs/guppy --browse

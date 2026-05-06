@@ -11,12 +11,12 @@ import gleam/otp/supervision
 import gleam/result
 import gleam/string
 import gleam/uri
+import guppy/internal/command
+import guppy/internal/connect_options.{ConnectOptions}
+import guppy/internal/protocol.{type ServerInfo}
 import mug
-import nuts/internal/command
-import nuts/internal/connect_options.{ConnectOptions}
-import nuts/internal/protocol.{type ServerInfo}
 
-@external(erlang, "nuts_ffi", "random_string")
+@external(erlang, "guppy_ffi", "random_string")
 @internal
 pub fn random_string(length: Int) -> String
 
@@ -652,7 +652,7 @@ fn handle_server_message(
                 headers: True,
                 protocol: 0,
                 auth:,
-                name: "nuts",
+                name: "guppy",
                 no_responders: True,
               )),
             )

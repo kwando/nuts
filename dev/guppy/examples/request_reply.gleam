@@ -1,7 +1,7 @@
 import gleam/erlang/process.{type Subject}
 import gleam/option.{None, Some}
 import gleam/otp/actor
-import nuts as nats
+import guppy as nats
 
 pub fn main() {
   let assert Ok(actor.Started(_, conn)) =

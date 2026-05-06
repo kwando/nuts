@@ -13,15 +13,15 @@ pub type KeyPair {
   KeyPair(public: BitArray, private: BitArray, kind: Int)
 }
 
-@external(erlang, "nuts_ffi", "decode32")
+@external(erlang, "guppy_ffi", "decode32")
 pub fn decode32(input: BitArray) -> Result(BitArray, Decode32Error)
 
-@external(erlang, "nuts_ffi", "encode32")
+@external(erlang, "guppy_ffi", "encode32")
 pub fn encode32(input: BitArray) -> String
 
 pub type GenerateKeyError
 
-@external(erlang, "nuts_ffi", "generate_key")
+@external(erlang, "guppy_ffi", "generate_key")
 pub fn generate_key(
   input: BitArray,
 ) -> Result(#(BitArray, BitArray), GenerateKeyError)
@@ -82,7 +82,7 @@ pub fn sign(key_pair: KeyPair, data: BitArray) -> BitArray {
   erl_sign(key_pair.private, data)
 }
 
-@external(erlang, "nuts_ffi", "sign")
+@external(erlang, "guppy_ffi", "sign")
 fn erl_sign(private_key: BitArray, data: BitArray) -> BitArray
 
 pub fn crc(input: BitArray) {

@@ -1,4 +1,4 @@
--module(nuts_ffi).
+-module(guppy_ffi).
 
 -export([decode32/1, encode32/1, generate_key/1, sign/2, random_string/1, match_crlf/1]).
 

@@ -9,7 +9,7 @@ import gleam/string
 import gleam/time/calendar
 import gleam/time/duration.{type Duration}
 import gleam/time/timestamp.{type Timestamp}
-import nuts.{type NatsMessage, NatsMessage}
+import guppy.{type NatsMessage, NatsMessage}
 
 pub fn list_stream_names_request(
   subject_filter: Option(String),
@@ -358,13 +358,13 @@ pub fn consumer_create_request(
   stream stream: String,
   consumer_name consumer_name: String,
   config config: ConsumerConfig,
-) -> nuts.NatsMessage {
+) -> guppy.NatsMessage {
   let subject = "$JS.API.CONSUMER.CREATE." <> stream <> "." <> consumer_name
   let durable_field = case config.durable {
     True -> [#("durable_name", json.string(consumer_name))]
     False -> []
   }
-  nuts.NatsMessage(
+  guppy.NatsMessage(
     subject:,
     reply_to: None,
     headers: [],
@@ -707,7 +707,7 @@ pub type DeliveryInfo {
   )
 }
 
-// $JS.ACK.nmea.nuts_example.1.1029024.940949.1777365454785427545.0
+// $JS.ACK.nmea.guppy_example.1.1029024.940949.1777365454785427545.0
 pub fn parse_ack(value: String) -> Result(DeliveryInfo, Nil) {
   case string.split(value, ".") {
     [

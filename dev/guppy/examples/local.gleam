@@ -3,27 +3,27 @@ import gleam/io
 import gleam/otp/actor
 import gleam/string
 import gleam_community/ansi
-import nuts
+import guppy
 
 pub fn main() {
   let assert Ok(actor.Started(_, nats)) =
-    nuts.start(
-      nuts.new("127.0.0.1", 6789)
-      |> nuts.with_logger(nuts.Logger(
+    guppy.start(
+      guppy.new("127.0.0.1", 6789)
+      |> guppy.with_logger(guppy.Logger(
         info: io.println_error,
         debug: io.println_error,
         warning: io.println_error,
       ))
-      |> nuts.with_ping_interval(30_000)
-      |> nuts.with_ping_timeout(10_000),
+      |> guppy.with_ping_interval(30_000)
+      |> guppy.with_ping_timeout(10_000),
     )
 
-  let assert Ok(me) = nuts.subscribe(nats, ">")
+  let assert Ok(me) = guppy.subscribe(nats, ">")
 
-  loop(me |> nuts.get_subject)
+  loop(me |> guppy.get_subject)
 }
 
-fn loop(subject: process.Subject(nuts.NatsMessage)) {
+fn loop(subject: process.Subject(guppy.NatsMessage)) {
   case process.receive(subject, 1000) {
     Error(_) -> loop(subject)
     Ok(event) -> {

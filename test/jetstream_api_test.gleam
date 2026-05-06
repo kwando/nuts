@@ -3,7 +3,7 @@ import gleam/dynamic/decode
 import gleam/json
 import gleam/option.{type Option, None, Some}
 import gleam/time/duration
-import nuts/internal/jetstream_api
+import guppy/internal/jetstream_api
 import simplifile
 
 pub fn consumer_get_info_request_subject_test() {

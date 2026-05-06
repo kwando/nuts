@@ -5,18 +5,18 @@ import gleam/json
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
-import nuts
-import nuts/internal/jetstream_api
+import guppy
+import guppy/internal/jetstream_api
 
 pub opaque type JetstreamContext {
   JetstreamContext(
-    conn: Subject(nuts.Message),
+    conn: Subject(guppy.Message),
     log: fn(String) -> Nil,
     request_timeout: Int,
   )
 }
 
-pub fn new_context(conn: Subject(nuts.Message)) -> JetstreamContext {
+pub fn new_context(conn: Subject(guppy.Message)) -> JetstreamContext {
   JetstreamContext(conn, fn(_) -> Nil { Nil }, request_timeout: 5000)
 }
 
@@ -28,7 +28,7 @@ pub fn with_logger(
 }
 
 pub type JetstreamError {
-  ConnectionError(nuts.NatsError)
+  ConnectionError(guppy.NatsError)
   ResponseDecodeError(json.DecodeError, input: BitArray)
   ApiError(code: Int, description: String, err_code: Int)
   StreamNotFound
@@ -43,7 +43,7 @@ pub fn list_stream_names(
   js: JetstreamContext,
 ) -> Result(jetstream_api.StreamNamesResponse, JetstreamError) {
   let assert Ok(msg) =
-    nuts.request(
+    guppy.request(
       js.conn,
       jetstream_api.list_stream_names_request(None, None),
       js.request_timeout,
@@ -93,10 +93,10 @@ pub fn get_info(
 
 fn make_request(
   js: JetstreamContext,
-  msg: nuts.NatsMessage,
-  next: fn(nuts.NatsMessage) -> Result(a, JetstreamError),
+  msg: guppy.NatsMessage,
+  next: fn(guppy.NatsMessage) -> Result(a, JetstreamError),
 ) -> Result(a, JetstreamError) {
-  case nuts.request(js.conn, msg, js.request_timeout) {
+  case guppy.request(js.conn, msg, js.request_timeout) {
     Ok(response) -> next(response)
     Error(err) -> Error(ConnectionError(err))
   }
@@ -185,7 +185,7 @@ pub fn delete_consumer(
   |> result.map_error(map_api_error)
 }
 
-fn decode_response(js: JetstreamContext, msg: nuts.NatsMessage, decoder) {
+fn decode_response(js: JetstreamContext, msg: guppy.NatsMessage, decoder) {
   js.log(msg |> string.inspect)
   js.log(msg.payload |> bit_array.to_string |> result.unwrap("<<binary>>"))
   json.parse_bits(msg.payload, decoder)
@@ -248,7 +248,7 @@ pub fn publish(
       options.expected_last_subject_seq,
     )
 
-  let message = nuts.NatsMessage(subject:, reply_to: None, headers:, payload:)
+  let message = guppy.NatsMessage(subject:, reply_to: None, headers:, payload:)
 
   let timeout = option.unwrap(options.timeout, js.request_timeout)
 
@@ -286,11 +286,11 @@ fn add_optional_int_header(
 
 fn make_request_with_timeout(
   js: JetstreamContext,
-  msg: nuts.NatsMessage,
+  msg: guppy.NatsMessage,
   timeout: Int,
-  next: fn(nuts.NatsMessage) -> Result(a, JetstreamError),
+  next: fn(guppy.NatsMessage) -> Result(a, JetstreamError),
 ) -> Result(a, JetstreamError) {
-  case nuts.request(js.conn, msg, timeout) {
+  case guppy.request(js.conn, msg, timeout) {
     Ok(response) -> next(response)
     Error(err) -> Error(ConnectionError(err))
   }

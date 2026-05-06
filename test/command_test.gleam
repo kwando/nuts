@@ -1,7 +1,7 @@
 import gleam/option.{None, Some}
 import gleam/string
-import nuts/internal/command
-import nuts/internal/connect_options.{ConnectOptions, UserPassAuth}
+import guppy/internal/command
+import guppy/internal/connect_options.{ConnectOptions, UserPassAuth}
 
 pub fn connect_with_user_pass_test() {
   let json =
@@ -14,7 +14,7 @@ pub fn connect_with_user_pass_test() {
       headers: True,
       protocol: 0,
       auth: UserPassAuth(user: "alice", pass: "secret"),
-      name: "nuts",
+      name: "guppy",
       no_responders: True,
     ))
 

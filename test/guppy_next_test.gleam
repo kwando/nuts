@@ -3,8 +3,8 @@ import gleam/erlang/process
 import gleam/int
 import gleam/option.{None, Some}
 import gleam/otp/actor.{Started}
-import nuts as nats
-import nuts/test_utils
+import guppy as nats
+import guppy/test_utils
 
 pub fn integration_test() {
   use port <- test_utils.with_nats_server()

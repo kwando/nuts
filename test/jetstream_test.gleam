@@ -9,11 +9,11 @@ import gleam/otp/actor
 import gleam/result
 import gleam/string
 import gleam_community/ansi
-import nuts.{type Message} as nats
-import nuts/internal/jetstream_api.{type DeliveryInfo}
-import nuts/jetstream
-import nuts/jetstream/simple_consumer
-import nuts/test_utils
+import guppy.{type Message} as nats
+import guppy/internal/jetstream_api.{type DeliveryInfo}
+import guppy/jetstream
+import guppy/jetstream/simple_consumer
+import guppy/test_utils
 
 pub fn consumer_test() {
   let assert Ok(actor.Started(_, conn)) =
