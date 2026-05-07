@@ -105,7 +105,7 @@ fn crc_loop(input: BitArray, crc: Int) {
 
       crc_loop(rest, crc)
     }
-    _ -> panic as "bad crc"
+    <<bits:bits>> -> crc_loop(bit_array.pad_to_bytes(bits), crc)
   }
 }
 
