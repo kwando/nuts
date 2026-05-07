@@ -184,10 +184,6 @@ fn new_subscriber_map() {
 }
 
 fn add_subscriber(map: SubscriberMap, subscriber: Subscriber) {
-  assert !dict.has_key(map.sids, subscriber.sid)
-    as { "sid " <> subscriber.sid <> " already registered" }
-  assert !dict.has_key(map.monitors, subscriber.monitor)
-    as "monitor already registered"
   SubscriberMap(
     sids: dict.insert(map.sids, subscriber.sid, subscriber),
     monitors: dict.insert(map.monitors, subscriber.monitor, subscriber),
@@ -291,7 +287,7 @@ fn handle_message(
   case msg {
     Connect -> {
       case state.socket {
-        Some(_) -> panic as "ALREADY CONNECTED"
+        Some(_) -> actor.continue(state)
         None ->
           state
           |> setup_connection
@@ -522,11 +518,6 @@ fn handle_request_timeout(
 ) -> actor.Next(ClientState, a) {
   case dict.get(state.response_map, inbox) {
     Ok(responder) -> {
-      // This message should have been sent from the timer that we are now trying to cancel.
-      // This assertion is only kept here for reference.
-      assert process.cancel_timer(responder.timeout_timer)
-        == process.TimerNotFound
-        as "this message should have come from the responder"
       process.send(responder.subject, Error(RequestTimedOut))
       update_response_map(state, dict.delete(_, inbox))
     }
@@ -833,7 +824,6 @@ fn setup_connection(state: ClientState) {
   state.logger.info(
     "setup connection " <> int.to_string(state.connection_attempt),
   )
-  assert state.socket == None as "cant reconnect when there is an open socket"
 
   let socket =
     mug.new(state.options.host, state.options.port)
