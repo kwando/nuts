@@ -1,3 +1,9 @@
+/// A pull-based JetStream consumer actor that manages message polling
+/// and acknowledgment for a NATS JetStream consumer.
+///
+/// The consumer automatically polls for messages, maintains an in-flight
+/// message window, and triggers new polls when the pending count drops
+/// below a configurable threshold.
 import gleam/bit_array
 import gleam/bool
 import gleam/erlang/process.{type Subject}
@@ -32,20 +38,43 @@ type ConsumerMessage {
   NatsMessage(NatsMessage)
 }
 
+/// The possible replies a message handler can return to control how a
+/// delivered JetStream message is acknowledged.
 pub opaque type HandlerReply {
+  /// Acknowledge the message as successfully processed.
   Ack
+
+  /// Negative acknowledgement requesting immediate redelivery.
   Retry
+
+  /// Negative acknowledgement requesting redelivery after the given duration.
   RetryLater(Duration)
+
+  /// Terminate the consumer and stop processing further messages.
   Terminate
 }
 
+/// Start a new simple JetStream consumer actor.
+///
+/// The consumer will subscribe to the NATS connection, automatically poll
+/// for messages from the specified stream and consumer, and invoke the
+/// provided handler for each received message.
+///
+/// ## Parameters
+///
+/// - `conn` - The NATS connection subject used to publish and receive messages.
+/// - `stream_name` - The name of the JetStream stream to consume from.
+/// - `consumer_name` - The name of the JetStream consumer on the stream.
+/// - `max_messages` - The maximum number of messages to keep in flight at once.
+/// - `threshold` - When pending messages drop to or below this threshold, a new poll is triggered.
+/// - `handler` - A function called for each received message that decides how the message should be acknowledged.
 pub fn start(
   conn: Subject(Message),
-  stream_name: String,
-  consumer_name: String,
-  max_messages: Int,
-  threshold: Int,
-  handler: fn(NatsMessage, DeliveryInfo) -> HandlerReply,
+  stream_name stream_name: String,
+  consumer_name consumer_name: String,
+  max_messages max_messages: Int,
+  threshold threshold: Int,
+  handler handler: fn(NatsMessage, DeliveryInfo) -> HandlerReply,
 ) -> Result(actor.Started(Nil), actor.StartError) {
   let inbox_prefix = "consumer." <> nats.random_string(10) <> "."
   actor.new_with_initialiser(1000, fn(self) {
@@ -198,14 +227,21 @@ pub fn start(
   |> actor.start
 }
 
+/// Request message redelivery after the given duration.
+///
+/// ## Parameters
+///
+/// - `duration` - The delay before the message should be redelivered.
 pub fn retry_later(duration: Duration) {
   RetryLater(duration)
 }
 
+/// Acknowledge successful message processing.
 pub fn ack() {
   Ack
 }
 
+/// Request immediate redelivery of the message.
 pub fn nak() {
   Retry
 }
