@@ -15,25 +15,15 @@ jobs:
 
       - name: Start NATS server
         run: |
-          cat nats.config
           docker run -d --name nats -p 6789:6789 \
             -v ${{ github.workspace }}/nats.config:/my-nats.config \
             nats:latest --config /my-nats.config
-          sleep 2
-          echo "--- Container status ---"
-          docker ps
-          echo "--- NATS logs ---"
-          docker logs nats
-          echo "--- Checking readiness ---"
           for i in {1..30}; do
-            if nc -z 127.0.0.1 6789 && docker ps -q -f name=nats | grep -q .; then
-              echo "NATS is ready"
+            if nc -z 127.0.0.1 6789; then
               exit 0
             fi
             sleep 1
           done
-          echo "NATS did not start in time"
-          docker logs nats
           exit 1
 
       - uses: erlef/setup-beam@v1
