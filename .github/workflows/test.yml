@@ -15,12 +15,18 @@ jobs:
 
       - name: Start NATS server
         run: |
+          cat nats.config
           docker run -d --name nats -p 6789:6789 \
             -v ${{ github.workspace }}/nats.config:/etc/nats/nats-server.conf \
             nats:latest
-          # Wait for NATS to be ready
+          sleep 2
+          echo "--- Container status ---"
+          docker ps
+          echo "--- NATS logs ---"
+          docker logs nats
+          echo "--- Checking readiness ---"
           for i in {1..30}; do
-            if nc -z 127.0.0.1 6789; then
+            if nc -z 127.0.0.1 6789 && docker ps -q -f name=nats | grep -q .; then
               echo "NATS is ready"
               exit 0
             fi
@@ -39,3 +45,7 @@ jobs:
       - run: gleam deps download
       - run: gleam test
       - run: gleam format --check src test
+
+      - name: Print NATS logs on failure
+        if: failure()
+        run: docker logs nats
