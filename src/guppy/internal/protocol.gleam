@@ -213,8 +213,7 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
         }
       }
     }
-    <<>> -> NeedsMoreData
-    msg -> ProtocolError("unhandled protocol message: " <> string.inspect(msg))
+    <<>> | _ -> NeedsMoreData
   }
 }
 
