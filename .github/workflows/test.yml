@@ -10,13 +10,26 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      nats:
-        image: nats:latest
-        ports:
-          - 6789:4222
     steps:
       - uses: actions/checkout@v4
+
+      - name: Start NATS server
+        run: |
+          docker run -d --name nats -p 6789:6789 \
+            -v ${{ github.workspace }}/nats.config:/etc/nats/nats-server.conf \
+            nats:latest
+          # Wait for NATS to be ready
+          for i in {1..30}; do
+            if nc -z 127.0.0.1 6789; then
+              echo "NATS is ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "NATS did not start in time"
+          docker logs nats
+          exit 1
+
       - uses: erlef/setup-beam@v1
         with:
           otp-version: "28.5"

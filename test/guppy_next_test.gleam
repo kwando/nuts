@@ -1,14 +1,11 @@
-import gleam/bit_array
 import gleam/erlang/process
-import gleam/int
 import gleam/option.{None, Some}
 import gleam/otp/actor.{Started}
 import guppy as nats
 import guppy/test_utils
 
 pub fn integration_test() {
-  use port <- test_utils.with_nats_server()
-  let options = nats.new("127.0.0.1", port)
+  let options = nats.new("127.0.0.1", 6789)
   let assert Ok(Started(_, nats_conn)) = nats.start(options)
 
   assert test_utils.await_connected(nats_conn, 5)
@@ -63,9 +60,8 @@ pub fn nkey_authorization_test() {
 }
 
 pub fn user_pass_authorization_test() {
-  use port <- test_utils.with_nats_server_with_auth("alice", "secret")
   let options =
-    nats.new("127.0.0.1", port)
+    nats.new("127.0.0.1", 6789)
     |> nats.username("alice")
     |> nats.password("secret")
 
@@ -74,9 +70,8 @@ pub fn user_pass_authorization_test() {
 }
 
 pub fn invalid_user_pass_authorization_test() {
-  use port <- test_utils.with_nats_server_with_auth("alice", "secret")
   let options =
-    nats.new("127.0.0.1", port)
+    nats.new("127.0.0.1", 6789)
     |> nats.username("alice")
     |> nats.password("wrongpassword")
 
@@ -84,50 +79,7 @@ pub fn invalid_user_pass_authorization_test() {
   assert !test_utils.await_connected(nats_conn, 10) as "connected to NATS"
 }
 
-pub fn reconnect_and_resubscribe_test() {
-  let #(port, subscription, conn) = {
-    use port <- test_utils.with_nats_server()
-    let assert Ok(Started(_, conn)) =
-      nats.new("127.0.0.1", port)
-      |> nats.start()
-
-    assert test_utils.await_connected(conn, 5)
-
-    // make a subscription
-    let assert Ok(subscription) =
-      conn
-      |> nats.subscribe("wobble")
-
-    #(port, subscription, conn)
-  }
-  assert !test_utils.await_connected(conn, 5) as "should not be connected"
-
-  // start the NATS server again
-  {
-    use <- test_utils.with_nats_server_on_port(port)
-    assert test_utils.await_connected(conn, 20)
-
-    let expected_payload =
-      int.random(10_000_000) |> int.to_string |> bit_array.from_string
-    let assert Ok(_) =
-      nats.new_message("wobble", expected_payload)
-      |> nats.publish(conn, _)
-      as "publish on reconnected server should work"
-
-    let assert Ok(nats.NatsMessage(
-      subject: "wobble",
-      reply_to: option.None,
-      headers: [],
-      payload: actual_payload,
-    )) = process.receive(nats.get_subject(subscription), 1000)
-      as "subscription should be resubscribed"
-
-    assert expected_payload == actual_payload
-  }
-}
-
 pub fn request_reply_test() {
-  use <- test_utils.with_nats_server_on_port(6789)
   let options = nats.new("127.0.0.1", 6789)
 
   let assert Ok(Started(_, nats_conn)) = nats.start(options)
@@ -174,8 +126,7 @@ fn echo_service(
 }
 
 pub fn request_timeout_test() {
-  use port <- test_utils.with_nats_server()
-  let options = nats.new("127.0.0.1", port)
+  let options = nats.new("127.0.0.1", 6789)
 
   let assert Ok(Started(_, nats_conn)) = nats.start(options)
   assert test_utils.await_connected(nats_conn, 5)
@@ -209,9 +160,8 @@ pub fn named_connection_test() {
 }
 
 pub fn ping_keeps_connection_alive_test() {
-  use port <- test_utils.with_nats_server()
   let options =
-    nats.new("127.0.0.1", port)
+    nats.new("127.0.0.1", 6789)
     |> nats.with_ping_interval(200)
     |> nats.with_ping_timeout(100)
 

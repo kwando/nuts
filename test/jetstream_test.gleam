@@ -189,10 +189,8 @@ fn producer_loop(conn: Subject(Message), subject: String, sleep: Int, gen) {
 }
 
 pub fn stream_publish_test() {
-  // Spawn a temporary NATS server with JetStream enabled on a random port.
-  use port <- test_utils.with_nats_server()
   let assert Ok(actor.Started(_, conn)) =
-    nats.new("127.0.0.1", port)
+    nats.new("127.0.0.1", 6789)
     |> nats.start()
 
   assert test_utils.await_connected(conn, 100)
