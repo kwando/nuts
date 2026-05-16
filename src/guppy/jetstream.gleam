@@ -1,3 +1,50 @@
+//// NATS JetStream client for the Guppy library.
+////
+//// This module provides a high-level API for interacting with NATS JetStream,
+//// including stream management, consumer management, and persistent message
+//// publishing.
+////
+//// ## Quick start
+////
+//// ```gleam
+//// import guppy
+//// import guppy/jetstream
+//// import gleam/option.{None}
+////
+//// pub fn main() {
+////   let assert Ok(conn) = guppy.start(guppy.new("127.0.0.1", 4222))
+////   let js = jetstream.new_context(conn)
+////
+////   // Create a stream
+////   let _ =
+////     jetstream.create_stream(
+////       js,
+////       jetstream.StreamOptions(
+////         stream_name: "orders",
+////         description: None,
+////         subjects: ["orders.>"],
+////         retention: jetstream.Limits,
+////         discard_policy: jetstream.DiscardOld,
+////         max_consumers: -1,
+////         max_msgs: -1,
+////         max_bytes: -1,
+////         max_age: 0,
+////         storage: jetstream.Memory,
+////         num_replicas: 1,
+////       ),
+////     )
+////
+////   // Publish a message
+////   let _ =
+////     jetstream.publish(
+////       js,
+////       "orders.created",
+////       <<"{\"id\": 1}">>,
+////       jetstream.default_publish_options(),
+////     )
+//// }
+//// ```
+
 import gleam/bit_array
 import gleam/dynamic/decode.{type Decoder}
 import gleam/erlang/process.{type Subject}
