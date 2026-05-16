@@ -672,17 +672,27 @@ pub fn pub_ack_decoder() -> Decoder(Result(PubAck, StreamApiError)) {
   decode.success(Ok(PubAck(stream:, seq:, duplicate:)))
 }
 
+/// Where the consumer should start delivering messages from.
 pub type DeliverPolicy {
-  All
-  New
-  Last
-  ByStartSequence(Int)
-  ByStartTime(Timestamp)
+  /// Deliver all available messages.
+  DeliverAll
+  /// Deliver only new messages that arrive after the consumer is created.
+  DeliverNew
+  /// Deliver only the last message for each subject.
+  DeliverLast
+  /// Deliver starting from the given sequence number.
+  DeliverByStartSequence(Int)
+  /// Deliver starting from the given timestamp.
+  DeliverByStartTime(Timestamp)
 }
 
+/// How messages must be acknowledged by the consumer.
 pub type AckPolicy {
+  /// Messages do not need to be acknowledged.
   NoAck
+  /// Acknowledging a message also acknowledges all earlier messages.
   AckAll
+  /// Each message must be individually acknowledged.
   AckExplicit
 }
 
@@ -694,8 +704,11 @@ fn ack_policy_to_json(ack_policy: AckPolicy) -> json.Json {
   }
 }
 
+/// The rate at which messages are delivered to the consumer.
 pub type ReplayPolicy {
+  /// Messages are delivered as fast as the consumer can process them.
   Instant
+  /// Messages are delivered at the same rate they were originally received.
   Original
 }
 
@@ -726,7 +739,7 @@ pub fn default_consumer_config() -> ConsumerConfig {
   ConsumerConfig(
     description: None,
     durable: False,
-    deliver_policy: All,
+    deliver_policy: DeliverAll,
     ack_policy: AckExplicit,
     ack_wait: None,
     max_deliver: -1,
@@ -955,18 +968,18 @@ fn consumer_config_decoder() -> Decoder(ConsumerConfig) {
 fn deliver_policy_decoder() -> Decoder(DeliverPolicy) {
   decode.then(decode.string, fn(policy) {
     case policy {
-      "all" -> decode.success(All)
-      "new" -> decode.success(New)
-      "last" -> decode.success(Last)
+      "all" -> decode.success(DeliverAll)
+      "new" -> decode.success(DeliverNew)
+      "last" -> decode.success(DeliverLast)
       "by_start_sequence" -> {
         use seq <- decode.field("opt_start_seq", decode.int)
-        decode.success(ByStartSequence(seq))
+        decode.success(DeliverByStartSequence(seq))
       }
       "by_start_time" -> {
         use ts <- decode.field("opt_start_time", decode_timestamp())
-        decode.success(ByStartTime(ts))
+        decode.success(DeliverByStartTime(ts))
       }
-      _ -> decode.failure(All, "deliver_policy")
+      _ -> decode.failure(DeliverAll, "deliver_policy")
     }
   })
 }
@@ -1024,14 +1037,14 @@ fn duration_to_json(duration: Duration) -> json.Json {
 
 fn deliver_policy_to_json(policy: DeliverPolicy) -> List(#(String, json.Json)) {
   case policy {
-    All -> [#("deliver_policy", json.string("all"))]
-    New -> [#("deliver_policy", json.string("new"))]
-    Last -> [#("deliver_policy", json.string("last"))]
-    ByStartSequence(seq) -> [
+    DeliverAll -> [#("deliver_policy", json.string("all"))]
+    DeliverNew -> [#("deliver_policy", json.string("new"))]
+    DeliverLast -> [#("deliver_policy", json.string("last"))]
+    DeliverByStartSequence(seq) -> [
       #("deliver_policy", json.string("by_start_sequence")),
       #("opt_start_seq", json.int(seq)),
     ]
-    ByStartTime(timestamp) -> [
+    DeliverByStartTime(timestamp) -> [
       #("deliver_policy", json.string("last")),
       #(
         "opt_start_time",

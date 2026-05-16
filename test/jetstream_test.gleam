@@ -58,7 +58,7 @@ pub fn consumer_test() {
       config: jetstream.ConsumerConfig(
         description: None,
         durable: True,
-        deliver_policy: jetstream.All,
+        deliver_policy: jetstream.DeliverAll,
         ack_policy: jetstream.AckExplicit,
         ack_wait: None,
         max_deliver: 10,
@@ -100,7 +100,7 @@ pub fn consumer_test() {
       config: jetstream.ConsumerConfig(
         ..jetstream.default_consumer_config(),
         durable: True,
-        deliver_policy: jetstream.All,
+        deliver_policy: jetstream.DeliverAll,
         ack_policy: jetstream.AckExplicit,
         max_deliver: 10,
         replay_policy: jetstream.Instant,

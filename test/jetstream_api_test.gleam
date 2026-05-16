@@ -87,7 +87,7 @@ pub fn consumer_get_info_response_decoder_test() {
   assert info.config.durable == True
   assert info.config.ack_policy == jetstream.AckExplicit
   assert info.config.replay_policy == jetstream.Instant
-  assert info.config.deliver_policy == jetstream.All
+  assert info.config.deliver_policy == jetstream.DeliverAll
   assert info.config.max_deliver == 10
   assert info.num_pending == 0
   assert info.num_ack_pending == 0
@@ -163,7 +163,7 @@ pub fn all_optional_fields_test() {
     jetstream.ConsumerConfig(
       description: Some("my worker"),
       durable: True,
-      deliver_policy: jetstream.ByStartSequence(42),
+      deliver_policy: jetstream.DeliverByStartSequence(42),
       ack_policy: jetstream.AckAll,
       ack_wait: Some(duration.seconds(30)),
       max_deliver: 5,
