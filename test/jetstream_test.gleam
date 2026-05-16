@@ -10,8 +10,7 @@ import gleam/result
 import gleam/string
 import gleam_community/ansi
 import guppy.{type Message} as nats
-import guppy/internal/jetstream_api.{type DeliveryInfo}
-import guppy/jetstream
+import guppy/jetstream.{type DeliveryInfo}
 import guppy/jetstream/simple_consumer
 import guppy/test_utils
 
@@ -34,18 +33,18 @@ pub fn consumer_test() {
   let assert Ok(_) = jetstream.list_stream_names(conn)
 
   let stream_config =
-    jetstream_api.StreamCreateRequest(
+    jetstream.StreamCreateRequest(
       stream_name: "my_stream",
       description: Some("hello world"),
       subjects: ["bar.*"],
-      retention: jetstream_api.Limits,
+      retention: jetstream.Limits,
       max_consumers: -1,
       max_msgs: -1,
       max_bytes: -1,
       max_age: 0,
-      storage: jetstream_api.Memory,
+      storage: jetstream.Memory,
       num_replicas: 1,
-      discard_policy: jetstream_api.DiscardOld,
+      discard_policy: jetstream.DiscardOld,
     )
   let assert Ok(_) = jetstream.create_stream(conn, stream_config)
   let assert Ok(_) = jetstream.create_stream(conn, stream_config)
@@ -56,18 +55,18 @@ pub fn consumer_test() {
       conn,
       stream: "my_stream",
       consumer_name:,
-      config: jetstream_api.ConsumerConfig(
+      config: jetstream.ConsumerConfig(
         description: None,
         durable: True,
-        deliver_policy: jetstream_api.All,
-        ack_policy: jetstream_api.AckExplicit,
+        deliver_policy: jetstream.All,
+        ack_policy: jetstream.AckExplicit,
         ack_wait: None,
         max_deliver: 10,
         max_ack_pending: None,
         max_waiting: None,
         backoff: None,
         inactive_threshold: None,
-        replay_policy: jetstream_api.Instant,
+        replay_policy: jetstream.Instant,
       ),
     )
 
@@ -76,8 +75,8 @@ pub fn consumer_test() {
   assert info.stream_name == "my_stream"
   assert info.name == consumer_name
   assert info.config.durable == True
-  assert info.config.ack_policy == jetstream_api.AckExplicit
-  assert info.config.replay_policy == jetstream_api.Instant
+  assert info.config.ack_policy == jetstream.AckExplicit
+  assert info.config.replay_policy == jetstream.Instant
 
   let assert Error(jetstream.ConsumerNotFound) =
     jetstream.get_consumer_info(
@@ -98,20 +97,20 @@ pub fn consumer_test() {
       conn,
       stream: "my_stream",
       consumer_name:,
-      config: jetstream_api.ConsumerConfig(
-        ..jetstream_api.default_consumer_config(),
+      config: jetstream.ConsumerConfig(
+        ..jetstream.default_consumer_config(),
         durable: True,
-        deliver_policy: jetstream_api.All,
-        ack_policy: jetstream_api.AckExplicit,
+        deliver_policy: jetstream.All,
+        ack_policy: jetstream.AckExplicit,
         max_deliver: 10,
-        replay_policy: jetstream_api.Instant,
+        replay_policy: jetstream.Instant,
       ),
     )
 
   let assert Ok(updated) =
     jetstream.update_stream(
       conn,
-      jetstream_api.StreamCreateRequest(
+      jetstream.StreamCreateRequest(
         ..stream_config,
         description: Some("updated description"),
         subjects: ["bar.*", "baz.*"],
@@ -158,7 +157,7 @@ pub fn consumer_test() {
   let assert Error(jetstream.StreamAlreadyExistsWithDifferentConfig) =
     jetstream.create_stream(
       conn,
-      jetstream_api.StreamCreateRequest(
+      jetstream.StreamCreateRequest(
         ..stream_config,
         description: Some("this is another description"),
       ),
@@ -198,18 +197,18 @@ pub fn stream_publish_test() {
 
   // Create a memory-backed stream that captures messages on the "pub.test" subject.
   let stream_config =
-    jetstream_api.StreamCreateRequest(
+    jetstream.StreamCreateRequest(
       stream_name: "pub_test_stream",
       description: None,
       subjects: ["pub.test"],
-      retention: jetstream_api.Limits,
+      retention: jetstream.Limits,
       max_consumers: -1,
       max_msgs: -1,
       max_bytes: -1,
       max_age: 0,
-      storage: jetstream_api.Memory,
+      storage: jetstream.Memory,
       num_replicas: 1,
-      discard_policy: jetstream_api.DiscardOld,
+      discard_policy: jetstream.DiscardOld,
     )
   let assert Ok(_) = jetstream.create_stream(js, stream_config)
 

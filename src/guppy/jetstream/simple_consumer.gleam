@@ -16,7 +16,7 @@ import gleam/result
 import gleam/string
 import gleam/time/duration.{type Duration}
 import guppy.{type Logger, type Message, type NatsMessage} as nats
-import guppy/internal/jetstream_api.{type DeliveryInfo}
+import guppy/jetstream.{type DeliveryInfo}
 
 type ConsumerState {
   ConsumerState(
@@ -189,19 +189,19 @@ pub fn start(
             // send publish
             let _ = case msg.reply_to {
               Some(ack) -> {
-                let assert Ok(info) = jetstream_api.parse_ack(ack)
+                let assert Ok(info) = jetstream.parse_ack(ack)
                 let ack_action = case state.handler(msg, info) {
-                  Ack -> jetstream_api.Ack
-                  Retry -> jetstream_api.Nak
-                  RetryLater(delay) -> jetstream_api.NakWithDelay(delay)
-                  Terminate -> jetstream_api.Term
+                  Ack -> jetstream.Ack
+                  Retry -> jetstream.Nak
+                  RetryLater(delay) -> jetstream.NakWithDelay(delay)
+                  Terminate -> jetstream.Term
                 }
                 let _ =
                   nats.publish(
                     conn,
                     nats.new_message(
                       ack,
-                      jetstream_api.ack_action_to_payload(ack_action),
+                      jetstream.ack_action_to_payload(ack_action),
                     ),
                   )
               }

@@ -3,12 +3,12 @@ import gleam/dynamic/decode
 import gleam/json
 import gleam/option.{type Option, None, Some}
 import gleam/time/duration
-import guppy/internal/jetstream_api
+import guppy/jetstream
 import simplifile
 
 pub fn consumer_get_info_request_subject_test() {
   let msg =
-    jetstream_api.consumer_get_info_request(
+    jetstream.consumer_get_info_request(
       stream: "my_stream",
       consumer_name: "my_consumer",
     )
@@ -17,7 +17,7 @@ pub fn consumer_get_info_request_subject_test() {
 
 pub fn consumer_delete_request_subject_test() {
   let msg =
-    jetstream_api.consumer_delete_request(
+    jetstream.consumer_delete_request(
       stream: "my_stream",
       consumer_name: "my_consumer",
     )
@@ -27,7 +27,7 @@ pub fn consumer_delete_request_subject_test() {
 pub fn consumer_delete_response_decoder_test() {
   let payload = bit_array.from_string("{\"success\":true}")
   let assert Ok(result) =
-    json.parse_bits(payload, jetstream_api.consumer_delete_response_decoder())
+    json.parse_bits(payload, jetstream.consumer_delete_response_decoder())
   let assert Ok(response) = result
   assert response.success == True
 }
@@ -38,27 +38,27 @@ pub fn consumer_delete_response_error_test() {
       "{\"error\":{\"code\":404,\"description\":\"consumer not found\",\"err_code\":10014}}",
     )
   let assert Ok(result) =
-    json.parse_bits(payload, jetstream_api.consumer_delete_response_decoder())
+    json.parse_bits(payload, jetstream.consumer_delete_response_decoder())
   let assert Error(err) = result
   assert err.err_code == 10_014
 }
 
 pub fn stream_update_request_subject_test() {
   let request =
-    jetstream_api.StreamCreateRequest(
+    jetstream.StreamCreateRequest(
       stream_name: "events",
       description: Some("updated stream"),
       subjects: ["foo.>", "bar.>"],
-      retention: jetstream_api.Limits,
+      retention: jetstream.Limits,
       max_consumers: -1,
       max_msgs: -1,
       max_bytes: -1,
       max_age: 0,
-      storage: jetstream_api.Memory,
+      storage: jetstream.Memory,
       num_replicas: 1,
-      discard_policy: jetstream_api.DiscardOld,
+      discard_policy: jetstream.DiscardOld,
     )
-  let msg = jetstream_api.stream_update_request(request)
+  let msg = jetstream.stream_update_request(request)
   assert msg.subject == "$JS.API.STREAM.UPDATE.events"
   let assert Ok(str) = bit_array.to_string(msg.payload)
   let assert Ok(decoded) = json.parse(str, update_request_decoder())
@@ -71,7 +71,7 @@ pub fn stream_update_response_decoder_test() {
   let assert Ok(payload) =
     simplifile.read_bits("test/fixtures/stream_info_response.json")
   let assert Ok(result) =
-    json.parse_bits(payload, jetstream_api.stream_update_response_decoder())
+    json.parse_bits(payload, jetstream.stream_update_response_decoder())
   let assert Ok(info) = result
   assert info.config.name == "my_stream"
 }
@@ -80,14 +80,14 @@ pub fn consumer_get_info_response_decoder_test() {
   let assert Ok(payload) =
     simplifile.read_bits("test/fixtures/consumer_info_response.json")
   let assert Ok(result) =
-    json.parse_bits(payload, jetstream_api.consumer_get_info_response_decoder())
+    json.parse_bits(payload, jetstream.consumer_get_info_response_decoder())
   let assert Ok(info) = result
   assert info.stream_name == "my_stream"
   assert info.name == "my_stream_consumer"
   assert info.config.durable == True
-  assert info.config.ack_policy == jetstream_api.AckExplicit
-  assert info.config.replay_policy == jetstream_api.Instant
-  assert info.config.deliver_policy == jetstream_api.All
+  assert info.config.ack_policy == jetstream.AckExplicit
+  assert info.config.replay_policy == jetstream.Instant
+  assert info.config.deliver_policy == jetstream.All
   assert info.config.max_deliver == 10
   assert info.num_pending == 0
   assert info.num_ack_pending == 0
@@ -101,15 +101,15 @@ pub fn consumer_get_info_response_error_test() {
       "{\"error\":{\"code\":404,\"description\":\"consumer not found\",\"err_code\":10014}}",
     )
   let assert Ok(result) =
-    json.parse_bits(payload, jetstream_api.consumer_get_info_response_decoder())
+    json.parse_bits(payload, jetstream.consumer_get_info_response_decoder())
   let assert Error(err) = result
   assert err.err_code == 10_014
 }
 
 pub fn default_config_subject_test() {
-  let config = jetstream_api.default_consumer_config()
+  let config = jetstream.default_consumer_config()
   let msg =
-    jetstream_api.consumer_create_request(
+    jetstream.consumer_create_request(
       stream: "events",
       consumer_name: "worker-1",
       config:,
@@ -118,9 +118,9 @@ pub fn default_config_subject_test() {
 }
 
 pub fn default_config_has_no_optional_fields_test() {
-  let config = jetstream_api.default_consumer_config()
+  let config = jetstream.default_consumer_config()
   let msg =
-    jetstream_api.consumer_create_request(
+    jetstream.consumer_create_request(
       stream: "events",
       consumer_name: "worker-1",
       config:,
@@ -141,13 +141,13 @@ pub fn default_config_has_no_optional_fields_test() {
 
 pub fn durable_includes_durable_name_in_json_test() {
   let config =
-    jetstream_api.ConsumerConfig(
-      ..jetstream_api.default_consumer_config(),
+    jetstream.ConsumerConfig(
+      ..jetstream.default_consumer_config(),
       durable: True,
       description: Some("my worker"),
     )
   let msg =
-    jetstream_api.consumer_create_request(
+    jetstream.consumer_create_request(
       stream: "orders",
       consumer_name: "order-worker",
       config:,
@@ -160,11 +160,11 @@ pub fn durable_includes_durable_name_in_json_test() {
 
 pub fn all_optional_fields_test() {
   let config =
-    jetstream_api.ConsumerConfig(
+    jetstream.ConsumerConfig(
       description: Some("my worker"),
       durable: True,
-      deliver_policy: jetstream_api.ByStartSequence(42),
-      ack_policy: jetstream_api.AckAll,
+      deliver_policy: jetstream.ByStartSequence(42),
+      ack_policy: jetstream.AckAll,
       ack_wait: Some(duration.seconds(30)),
       max_deliver: 5,
       max_ack_pending: Some(100),
@@ -175,10 +175,10 @@ pub fn all_optional_fields_test() {
         duration.seconds(300),
       ]),
       inactive_threshold: Some(duration.minutes(5)),
-      replay_policy: jetstream_api.Original,
+      replay_policy: jetstream.Original,
     )
   let msg =
-    jetstream_api.consumer_create_request(
+    jetstream.consumer_create_request(
       stream: "orders",
       consumer_name: "order-worker",
       config:,
@@ -203,12 +203,12 @@ pub fn all_optional_fields_test() {
 
 pub fn ephemeral_omits_durable_name_test() {
   let config =
-    jetstream_api.ConsumerConfig(
-      ..jetstream_api.default_consumer_config(),
+    jetstream.ConsumerConfig(
+      ..jetstream.default_consumer_config(),
       durable: False,
     )
   let msg =
-    jetstream_api.consumer_create_request(
+    jetstream.consumer_create_request(
       stream: "events",
       consumer_name: "ephemeral-1",
       config:,

@@ -1,12 +1,16 @@
 import gleam/bit_array
+import gleam/dynamic/decode.{type Decoder}
 import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/json
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
-import guppy
-import guppy/internal/jetstream_api
+import gleam/time/calendar
+import gleam/time/duration.{type Duration}
+import gleam/time/timestamp.{type Timestamp}
+import guppy.{type NatsMessage, NatsMessage}
 
 pub opaque type JetstreamContext {
   JetstreamContext(
@@ -41,27 +45,27 @@ pub type JetstreamError {
 
 pub fn list_stream_names(
   js: JetstreamContext,
-) -> Result(jetstream_api.StreamNamesResponse, JetstreamError) {
+) -> Result(StreamNamesResponse, JetstreamError) {
   let assert Ok(msg) =
     guppy.request(
       js.conn,
-      jetstream_api.list_stream_names_request(None, None),
+      list_stream_names_request(None, None),
       js.request_timeout,
     )
 
-  decode_response(js, msg, jetstream_api.stream_names_response_decoder())
+  decode_response(js, msg, stream_names_response_decoder())
 }
 
 pub fn create_stream(
   js: JetstreamContext,
-  options: jetstream_api.StreamCreateRequest,
-) -> Result(jetstream_api.StreamCreateResponse, JetstreamError) {
-  use msg <- make_request(js, jetstream_api.stream_create_request(options))
+  options: StreamCreateRequest,
+) -> Result(StreamCreateResponse, JetstreamError) {
+  use msg <- make_request(js, stream_create_request(options))
 
   use api_response <- result.try(decode_response(
     js,
     msg,
-    jetstream_api.stream_create_response_decoder(),
+    stream_create_response_decoder(),
   ))
   api_response
   |> result.map_error(map_api_error)
@@ -70,10 +74,10 @@ pub fn create_stream(
 pub fn get_info(
   js: JetstreamContext,
   stream: String,
-) -> Result(jetstream_api.StreamGetInfoResponse, JetstreamError) {
+) -> Result(StreamGetInfoResponse, JetstreamError) {
   use resp <- make_request(
     js,
-    jetstream_api.stream_get_info_request(
+    stream_get_info_request(
       stream:,
       deleted_details: False,
       subjects_filter: None,
@@ -85,7 +89,7 @@ pub fn get_info(
   use decoded_result <- result.try(decode_response(
     js,
     resp,
-    jetstream_api.stream_get_info_response_decoder(),
+    stream_get_info_response_decoder(),
   ))
   decoded_result
   |> result.map_error(map_api_error)
@@ -105,12 +109,12 @@ fn make_request(
 pub fn delete_stream(
   js: JetstreamContext,
   stream: String,
-) -> Result(jetstream_api.StreamDeleteResponse, JetstreamError) {
-  use msg <- make_request(js, jetstream_api.stream_delete_request(stream))
+) -> Result(StreamDeleteResponse, JetstreamError) {
+  use msg <- make_request(js, stream_delete_request(stream))
   use decoded_result <- result.try(decode_response(
     js,
     msg,
-    jetstream_api.stream_delete_response_decoder(),
+    stream_delete_response_decoder(),
   ))
   decoded_result
   |> result.map_error(map_api_error)
@@ -118,13 +122,13 @@ pub fn delete_stream(
 
 pub fn update_stream(
   js: JetstreamContext,
-  options: jetstream_api.StreamCreateRequest,
-) -> Result(jetstream_api.StreamGetInfoResponse, JetstreamError) {
-  use msg <- make_request(js, jetstream_api.stream_update_request(options))
+  options: StreamCreateRequest,
+) -> Result(StreamGetInfoResponse, JetstreamError) {
+  use msg <- make_request(js, stream_update_request(options))
   use decoded_result <- result.try(decode_response(
     js,
     msg,
-    jetstream_api.stream_update_response_decoder(),
+    stream_update_response_decoder(),
   ))
   decoded_result
   |> result.map_error(map_api_error)
@@ -134,16 +138,16 @@ pub fn create_consumer(
   js: JetstreamContext,
   stream stream: String,
   consumer_name consumer_name: String,
-  config config: jetstream_api.ConsumerConfig,
-) -> Result(jetstream_api.ConsumerCreateResponse, JetstreamError) {
+  config config: ConsumerConfig,
+) -> Result(ConsumerCreateResponse, JetstreamError) {
   use msg <- make_request(
     js,
-    jetstream_api.consumer_create_request(stream:, consumer_name:, config:),
+    consumer_create_request(stream:, consumer_name:, config:),
   )
   use decoded_result <- result.try(decode_response(
     js,
     msg,
-    jetstream_api.consumer_create_response_decoder(),
+    consumer_create_response_decoder(),
   ))
   decoded_result
   |> result.map_error(map_api_error)
@@ -153,15 +157,15 @@ pub fn get_consumer_info(
   js: JetstreamContext,
   stream stream: String,
   consumer_name consumer_name: String,
-) -> Result(jetstream_api.ConsumerGetInfoResponse, JetstreamError) {
+) -> Result(ConsumerGetInfoResponse, JetstreamError) {
   use msg <- make_request(
     js,
-    jetstream_api.consumer_get_info_request(stream:, consumer_name:),
+    consumer_get_info_request(stream:, consumer_name:),
   )
   use decoded_result <- result.try(decode_response(
     js,
     msg,
-    jetstream_api.consumer_get_info_response_decoder(),
+    consumer_get_info_response_decoder(),
   ))
   decoded_result
   |> result.map_error(map_api_error)
@@ -171,15 +175,12 @@ pub fn delete_consumer(
   js: JetstreamContext,
   stream stream: String,
   consumer_name consumer_name: String,
-) -> Result(jetstream_api.ConsumerDeleteResponse, JetstreamError) {
-  use msg <- make_request(
-    js,
-    jetstream_api.consumer_delete_request(stream:, consumer_name:),
-  )
+) -> Result(ConsumerDeleteResponse, JetstreamError) {
+  use msg <- make_request(js, consumer_delete_request(stream:, consumer_name:))
   use decoded_result <- result.try(decode_response(
     js,
     msg,
-    jetstream_api.consumer_delete_response_decoder(),
+    consumer_delete_response_decoder(),
   ))
   decoded_result
   |> result.map_error(map_api_error)
@@ -192,7 +193,7 @@ fn decode_response(js: JetstreamContext, msg: guppy.NatsMessage, decoder) {
   |> result.map_error(ResponseDecodeError(_, msg.payload))
 }
 
-fn map_api_error(err: jetstream_api.StreamApiError) {
+fn map_api_error(err: StreamApiError) {
   case err.err_code {
     10_059 -> StreamNotFound
     10_058 -> StreamAlreadyExistsWithDifferentConfig
@@ -234,7 +235,7 @@ pub fn publish(
   subject: String,
   payload: BitArray,
   options: PublishOptions,
-) -> Result(jetstream_api.PubAck, JetstreamError) {
+) -> Result(PubAck, JetstreamError) {
   let headers =
     []
     |> add_optional_header("Nats-Msg-Id", options.msg_id)
@@ -253,11 +254,7 @@ pub fn publish(
   let timeout = option.unwrap(options.timeout, js.request_timeout)
 
   use msg <- make_request_with_timeout(js, message, timeout)
-  use decoded_result <- result.try(decode_response(
-    js,
-    msg,
-    jetstream_api.pub_ack_decoder(),
-  ))
+  use decoded_result <- result.try(decode_response(js, msg, pub_ack_decoder()))
   decoded_result
   |> result.map_error(map_api_error)
 }
@@ -296,6 +293,778 @@ fn make_request_with_timeout(
   }
 }
 
+@internal
+pub fn list_stream_names_request(
+  subject_filter: Option(String),
+  offset: Option(Int),
+) -> NatsMessage {
+  NatsMessage(
+    subject: "$JS.API.STREAM.NAMES",
+    reply_to: None,
+    headers: [],
+    payload: json_payload(json.object(
+      []
+      |> optional_field("offset", offset, json.int)
+      |> optional_field("subject", subject_filter, json.string),
+    )),
+  )
+}
+
+pub type StreamNamesResponse {
+  StreamNamesResponse(
+    total: Int,
+    offset: Int,
+    limit: Int,
+    streams: List(String),
+  )
+}
+
+@internal
+pub fn stream_names_response_decoder() -> Decoder(StreamNamesResponse) {
+  use total <- decode.field("total", decode.int)
+  use offset <- decode.field("offset", decode.int)
+  use limit <- decode.field("limit", decode.int)
+  use streams <- decode.field(
+    "streams",
+    decode.optional(decode.list(decode.string)),
+  )
+  decode.success(StreamNamesResponse(
+    total:,
+    offset:,
+    limit:,
+    streams: option.unwrap(streams, []),
+  ))
+}
+
+@internal
+pub fn stream_get_info_request(
+  stream stream: String,
+  deleted_details deleted_details: Bool,
+  subjects_filter subjects_filter: Option(String),
+  offset offset: Int,
+) -> NatsMessage {
+  NatsMessage(
+    subject: "$JS.API.STREAM.INFO." <> stream,
+    reply_to: None,
+    headers: [],
+    payload: json_payload(json.object(
+      [
+        #("deleted_details", json.bool(deleted_details)),
+        #("offset", json.int(offset)),
+      ]
+      |> optional_field("subject", subjects_filter, json.string),
+    )),
+  )
+}
+
+pub type StreamConfig {
+  StreamConfig(
+    name: String,
+    description: Option(String),
+    subjects: List(String),
+  )
+}
+
+fn stream_config_decoder() -> Decoder(StreamConfig) {
+  use name <- decode.field("name", decode.string)
+  use description <- decode.field("description", decode.optional(decode.string))
+  use subjects <- decode.field("subjects", decode.list(decode.string))
+  decode.success(StreamConfig(name:, description:, subjects:))
+}
+
+pub type StreamState {
+  StreamState(
+    messages: Int,
+    bytes: Int,
+    first_seq: Int,
+    first_ts: Timestamp,
+    last_seq: Int,
+    last_ts: Timestamp,
+    consumer_count: Int,
+  )
+}
+
+fn stream_state_decoder() -> Decoder(StreamState) {
+  let ts_decoder = decode_timestamp()
+  use messages <- decode.field("messages", decode.int)
+  use bytes <- decode.field("bytes", decode.int)
+  use first_seq <- decode.field("first_seq", decode.int)
+  use first_ts <- decode.field("first_ts", ts_decoder)
+  use last_seq <- decode.field("last_seq", decode.int)
+  use last_ts <- decode.field("last_ts", ts_decoder)
+  use consumer_count <- decode.field("consumer_count", decode.int)
+  decode.success(StreamState(
+    messages:,
+    bytes:,
+    first_seq:,
+    first_ts:,
+    last_seq:,
+    last_ts:,
+    consumer_count:,
+  ))
+}
+
+fn decode_timestamp() {
+  decode.then(decode.string, fn(ts_string) {
+    case timestamp.parse_rfc3339(ts_string) {
+      Ok(ts) -> decode.success(ts)
+      Error(_) -> decode.failure(timestamp.from_unix_seconds(0), "Timestamp")
+    }
+  })
+}
+
+@internal
+pub type StreamGetInfoResponse {
+  StreamGetInfoResponse(config: StreamConfig, state: StreamState)
+}
+
+@internal
+pub fn stream_get_info_response_decoder() -> Decoder(
+  Result(StreamGetInfoResponse, StreamApiError),
+) {
+  use <- decode_stream_api_error()
+  use config <- decode.field("config", stream_config_decoder())
+  use state <- decode.field("state", stream_state_decoder())
+  decode.success(Ok(StreamGetInfoResponse(config:, state:)))
+}
+
+pub type Retention {
+  Limits
+  Interest
+  Workqueue
+}
+
+pub type Storage {
+  File
+  Memory
+}
+
+pub type DiscardPolicy {
+  DiscardNew
+  DiscardOld
+}
+
+pub type StreamCreateRequest {
+  StreamCreateRequest(
+    stream_name: String,
+    description: Option(String),
+    subjects: List(String),
+    retention: Retention,
+    discard_policy: DiscardPolicy,
+    max_consumers: Int,
+    max_msgs: Int,
+    max_bytes: Int,
+    max_age: Int,
+    storage: Storage,
+    num_replicas: Int,
+  )
+}
+
+@internal
+pub fn stream_create_request(request: StreamCreateRequest) -> NatsMessage {
+  NatsMessage(
+    subject: "$JS.API.STREAM.CREATE." <> request.stream_name,
+    reply_to: None,
+    headers: [],
+    payload: json_payload(json.object(
+      [
+        #("name", json.string(request.stream_name)),
+        #("subjects", json.array(request.subjects, json.string)),
+        #("retention", json.string(retention_to_string(request.retention))),
+        #("max_consumers", json.int(request.max_consumers)),
+        #("max_msgs", json.int(request.max_msgs)),
+        #("max_bytes", json.int(request.max_bytes)),
+        #("max_age", json.int(request.max_age)),
+        #("storage", json.string(storage_to_string(request.storage))),
+        #("num_replicas", json.int(request.num_replicas)),
+        #(
+          "discard",
+          json.string(discard_policy_to_string(request.discard_policy)),
+        ),
+      ]
+      |> optional_field("description", request.description, json.string),
+    )),
+  )
+}
+
+@internal
+pub fn stream_create_response_decoder() -> Decoder(
+  Result(StreamCreateResponse, StreamApiError),
+) {
+  use <- decode_stream_api_error()
+  use name <- decode.subfield(["config", "name"], decode.string)
+  decode.success(Ok(StreamCreated(name)))
+}
+
+@internal
+pub fn stream_delete_request(stream_name: String) -> NatsMessage {
+  NatsMessage(
+    subject: "$JS.API.STREAM.DELETE." <> stream_name,
+    reply_to: None,
+    headers: [],
+    payload: bit_array.from_string(""),
+  )
+}
+
+pub type StreamDeleteResponse {
+  StreamDeleteResponse(success: Bool)
+}
+
+@internal
+pub fn stream_delete_response_decoder() {
+  use <- decode_stream_api_error()
+  use success <- decode.field("success", decode.bool)
+  decode.success(Ok(StreamDeleteResponse(success)))
+}
+
+@internal
+pub fn stream_update_request(request: StreamCreateRequest) -> NatsMessage {
+  NatsMessage(
+    subject: "$JS.API.STREAM.UPDATE." <> request.stream_name,
+    reply_to: None,
+    headers: [],
+    payload: json_payload(json.object(
+      [
+        #("name", json.string(request.stream_name)),
+        #("subjects", json.array(request.subjects, json.string)),
+        #("retention", json.string(retention_to_string(request.retention))),
+        #("max_consumers", json.int(request.max_consumers)),
+        #("max_msgs", json.int(request.max_msgs)),
+        #("max_bytes", json.int(request.max_bytes)),
+        #("max_age", json.int(request.max_age)),
+        #("storage", json.string(storage_to_string(request.storage))),
+        #("num_replicas", json.int(request.num_replicas)),
+        #(
+          "discard",
+          json.string(discard_policy_to_string(request.discard_policy)),
+        ),
+      ]
+      |> optional_field("description", request.description, json.string),
+    )),
+  )
+}
+
+@internal
+pub fn stream_update_response_decoder() -> Decoder(
+  Result(StreamGetInfoResponse, StreamApiError),
+) {
+  use <- decode_stream_api_error()
+  use config <- decode.field("config", stream_config_decoder())
+  use state <- decode.field("state", stream_state_decoder())
+  decode.success(Ok(StreamGetInfoResponse(config:, state:)))
+}
+
+fn discard_policy_to_string(discard_policy: DiscardPolicy) -> String {
+  case discard_policy {
+    DiscardNew -> "new"
+    DiscardOld -> "old"
+  }
+}
+
+pub type StreamApiError {
+  StreamApiError(code: Int, description: String, err_code: Int)
+}
+
+pub type StreamCreateResponse {
+  StreamCreated(name: String)
+}
+
+pub type PubAck {
+  PubAck(stream: String, seq: Int, duplicate: Bool)
+}
+
+@internal
+pub fn pub_ack_decoder() -> Decoder(Result(PubAck, StreamApiError)) {
+  use <- decode_stream_api_error()
+  use stream <- decode.field("stream", decode.string)
+  use seq <- decode.field("seq", decode.int)
+  use duplicate <- decode.optional_field("duplicate", False, decode.bool)
+  decode.success(Ok(PubAck(stream:, seq:, duplicate:)))
+}
+
+pub type DeliverPolicy {
+  All
+  New
+  Last
+  ByStartSequence(Int)
+  ByStartTime(Timestamp)
+}
+
+pub type AckPolicy {
+  NoAck
+  AckAll
+  AckExplicit
+}
+
+fn ack_policy_to_json(ack_policy: AckPolicy) -> json.Json {
+  case ack_policy {
+    NoAck -> json.string("none")
+    AckAll -> json.string("all")
+    AckExplicit -> json.string("explicit")
+  }
+}
+
+pub type ReplayPolicy {
+  Instant
+  Original
+}
+
+fn replay_policy_to_json(replay_policy: ReplayPolicy) -> json.Json {
+  case replay_policy {
+    Instant -> json.string("instant")
+    Original -> json.string("original")
+  }
+}
+
+pub type ConsumerConfig {
+  ConsumerConfig(
+    description: Option(String),
+    durable: Bool,
+    deliver_policy: DeliverPolicy,
+    ack_policy: AckPolicy,
+    ack_wait: Option(Duration),
+    max_deliver: Int,
+    max_ack_pending: Option(Int),
+    max_waiting: Option(Int),
+    backoff: Option(List(Duration)),
+    inactive_threshold: Option(Duration),
+    replay_policy: ReplayPolicy,
+  )
+}
+
+pub fn default_consumer_config() -> ConsumerConfig {
+  ConsumerConfig(
+    description: None,
+    durable: False,
+    deliver_policy: All,
+    ack_policy: AckExplicit,
+    ack_wait: None,
+    max_deliver: -1,
+    max_ack_pending: None,
+    max_waiting: None,
+    backoff: None,
+    inactive_threshold: None,
+    replay_policy: Instant,
+  )
+}
+
+@internal
+pub fn consumer_create_request(
+  stream stream: String,
+  consumer_name consumer_name: String,
+  config config: ConsumerConfig,
+) -> guppy.NatsMessage {
+  let subject = "$JS.API.CONSUMER.CREATE." <> stream <> "." <> consumer_name
+  let durable_field = case config.durable {
+    True -> [#("durable_name", json.string(consumer_name))]
+    False -> []
+  }
+  guppy.NatsMessage(
+    subject:,
+    reply_to: None,
+    headers: [],
+    payload: json_payload(
+      json.object([
+        #("stream_name", json.string(stream)),
+        #(
+          "config",
+          json.object(
+            list.append(
+              durable_field,
+              deliver_policy_to_json(config.deliver_policy),
+            )
+            |> list.append([
+              #("ack_policy", ack_policy_to_json(config.ack_policy)),
+              #("replay_policy", replay_policy_to_json(config.replay_policy)),
+              #("max_deliver", json.int(config.max_deliver)),
+            ])
+            |> optional_field("description", config.description, json.string)
+            |> optional_field("ack_wait", config.ack_wait, duration_to_json)
+            |> optional_field(
+              "max_ack_pending",
+              config.max_ack_pending,
+              json.int,
+            )
+            |> optional_field("max_waiting", config.max_waiting, json.int)
+            |> optional_field("backoff", config.backoff, fn(delays) {
+              json.array(delays, duration_to_json)
+            })
+            |> optional_field(
+              "inactive_threshold",
+              config.inactive_threshold,
+              duration_to_json,
+            ),
+          ),
+        ),
+      ]),
+    ),
+  )
+}
+
+pub type ConsumerCreateResponse {
+  ConsumerCreateResponse(
+    stream_name: String,
+    name: String,
+    created: Timestamp,
+    timestamp: Timestamp,
+  )
+}
+
+@internal
+pub fn consumer_create_response_decoder() -> Decoder(
+  Result(ConsumerCreateResponse, StreamApiError),
+) {
+  use <- decode_stream_api_error()
+
+  use stream_name <- decode.field("stream_name", decode.string)
+  use name <- decode.field("name", decode.string)
+  use created <- decode.field("created", decode_timestamp())
+  use timestamp <- decode.field("ts", decode_timestamp())
+  decode.success(
+    Ok(ConsumerCreateResponse(stream_name:, name:, created:, timestamp:)),
+  )
+}
+
+@internal
+pub fn consumer_get_info_request(
+  stream stream: String,
+  consumer_name consumer_name: String,
+) -> NatsMessage {
+  NatsMessage(
+    subject: "$JS.API.CONSUMER.INFO." <> stream <> "." <> consumer_name,
+    reply_to: None,
+    headers: [],
+    payload: bit_array.from_string(""),
+  )
+}
+
+@internal
+pub fn consumer_delete_request(
+  stream stream: String,
+  consumer_name consumer_name: String,
+) -> NatsMessage {
+  NatsMessage(
+    subject: "$JS.API.CONSUMER.DELETE." <> stream <> "." <> consumer_name,
+    reply_to: None,
+    headers: [],
+    payload: bit_array.from_string(""),
+  )
+}
+
+pub type ConsumerDeleteResponse {
+  ConsumerDeleteResponse(success: Bool)
+}
+
+@internal
+pub fn consumer_delete_response_decoder() -> Decoder(
+  Result(ConsumerDeleteResponse, StreamApiError),
+) {
+  use <- decode_stream_api_error()
+  use success <- decode.field("success", decode.bool)
+  decode.success(Ok(ConsumerDeleteResponse(success)))
+}
+
+pub type ConsumerGetInfoResponse {
+  ConsumerGetInfoResponse(
+    stream_name: String,
+    name: String,
+    config: ConsumerConfig,
+    created: Timestamp,
+    timestamp: Timestamp,
+    num_pending: Int,
+    num_ack_pending: Int,
+    num_redelivered: Int,
+    num_waiting: Int,
+  )
+}
+
+@internal
+pub fn consumer_get_info_response_decoder() -> Decoder(
+  Result(ConsumerGetInfoResponse, StreamApiError),
+) {
+  use <- decode_stream_api_error()
+  use stream_name <- decode.field("stream_name", decode.string)
+  use name <- decode.field("name", decode.string)
+  use config <- decode.field("config", consumer_config_decoder())
+  use created <- decode.field("created", decode_timestamp())
+  use timestamp <- decode.field("ts", decode_timestamp())
+  use num_pending <- decode.optional_field("num_pending", 0, decode.int)
+  use num_ack_pending <- decode.optional_field("num_ack_pending", 0, decode.int)
+  use num_redelivered <- decode.optional_field("num_redelivered", 0, decode.int)
+  use num_waiting <- decode.optional_field("num_waiting", 0, decode.int)
+  decode.success(
+    Ok(ConsumerGetInfoResponse(
+      stream_name:,
+      name:,
+      config:,
+      created:,
+      timestamp:,
+      num_pending:,
+      num_ack_pending:,
+      num_redelivered:,
+      num_waiting:,
+    )),
+  )
+}
+
+fn consumer_config_decoder() -> Decoder(ConsumerConfig) {
+  use durable_name <- decode.optional_field(
+    "durable_name",
+    None,
+    decode.optional(decode.string),
+  )
+  use description <- decode.optional_field(
+    "description",
+    None,
+    decode.optional(decode.string),
+  )
+  use deliver_policy <- decode.field("deliver_policy", deliver_policy_decoder())
+  use ack_policy <- decode.field("ack_policy", ack_policy_decoder())
+  use ack_wait <- decode.optional_field(
+    "ack_wait",
+    None,
+    decode.optional(duration_from_ns_decoder()),
+  )
+  use max_deliver <- decode.optional_field("max_deliver", -1, decode.int)
+  use max_ack_pending <- decode.optional_field(
+    "max_ack_pending",
+    None,
+    decode.optional(decode.int),
+  )
+  use max_waiting <- decode.optional_field(
+    "max_waiting",
+    None,
+    decode.optional(decode.int),
+  )
+  use backoff <- decode.optional_field(
+    "backoff",
+    None,
+    decode.optional(decode.list(duration_from_ns_decoder())),
+  )
+  use inactive_threshold <- decode.optional_field(
+    "inactive_threshold",
+    None,
+    decode.optional(duration_from_ns_decoder()),
+  )
+  use replay_policy <- decode.field("replay_policy", replay_policy_decoder())
+  decode.success(ConsumerConfig(
+    description:,
+    durable: durable_name != None,
+    deliver_policy:,
+    ack_policy:,
+    ack_wait:,
+    max_deliver:,
+    max_ack_pending:,
+    max_waiting:,
+    backoff:,
+    inactive_threshold:,
+    replay_policy:,
+  ))
+}
+
+fn deliver_policy_decoder() -> Decoder(DeliverPolicy) {
+  decode.then(decode.string, fn(policy) {
+    case policy {
+      "all" -> decode.success(All)
+      "new" -> decode.success(New)
+      "last" -> decode.success(Last)
+      "by_start_sequence" -> {
+        use seq <- decode.field("opt_start_seq", decode.int)
+        decode.success(ByStartSequence(seq))
+      }
+      "by_start_time" -> {
+        use ts <- decode.field("opt_start_time", decode_timestamp())
+        decode.success(ByStartTime(ts))
+      }
+      _ -> decode.failure(All, "deliver_policy")
+    }
+  })
+}
+
+fn ack_policy_decoder() -> Decoder(AckPolicy) {
+  decode.then(decode.string, fn(policy) {
+    case policy {
+      "none" -> decode.success(NoAck)
+      "all" -> decode.success(AckAll)
+      "explicit" -> decode.success(AckExplicit)
+      _ -> decode.failure(AckExplicit, "ack_policy")
+    }
+  })
+}
+
+fn replay_policy_decoder() -> Decoder(ReplayPolicy) {
+  decode.then(decode.string, fn(policy) {
+    case policy {
+      "instant" -> decode.success(Instant)
+      "original" -> decode.success(Original)
+      _ -> decode.success(Instant)
+    }
+  })
+}
+
+fn duration_from_ns_decoder() -> Decoder(Duration) {
+  decode.then(decode.int, fn(ns) { decode.success(duration.nanoseconds(ns)) })
+}
+
+@internal
+pub fn consumer_pull_next_messages(
+  stream stream: String,
+  consumer consumer: String,
+  expires expires: Option(Duration),
+  batch batch: Option(Int),
+  max_bytes max_bytes: Option(Int),
+) -> NatsMessage {
+  NatsMessage(
+    subject: "$JS.API.CONSUMER.MSG.NEXT." <> stream <> "." <> consumer,
+    reply_to: None,
+    headers: [],
+    payload: json_payload(json.object(
+      []
+      |> optional_field("expires", expires, duration_to_json)
+      |> optional_field("batch", batch, json.int)
+      |> optional_field("max_bytes", max_bytes, json.int),
+    )),
+  )
+}
+
+fn duration_to_json(duration: Duration) -> json.Json {
+  let #(seconds, nano_seconds) = duration.to_seconds_and_nanoseconds(duration)
+  json.int(seconds * 1_000_000_000 + nano_seconds)
+}
+
+fn deliver_policy_to_json(policy: DeliverPolicy) -> List(#(String, json.Json)) {
+  case policy {
+    All -> [#("deliver_policy", json.string("all"))]
+    New -> [#("deliver_policy", json.string("new"))]
+    Last -> [#("deliver_policy", json.string("last"))]
+    ByStartSequence(seq) -> [
+      #("deliver_policy", json.string("by_start_sequence")),
+      #("opt_start_seq", json.int(seq)),
+    ]
+    ByStartTime(timestamp) -> [
+      #("deliver_policy", json.string("last")),
+      #(
+        "opt_start_time",
+        json.string(timestamp.to_rfc3339(timestamp, calendar.utc_offset)),
+      ),
+    ]
+  }
+}
+
+fn storage_to_string(storage: Storage) -> String {
+  case storage {
+    File -> "file"
+    Memory -> "memory"
+  }
+}
+
+fn retention_to_string(retention: Retention) -> String {
+  case retention {
+    Limits -> "limits"
+    Interest -> "interest"
+    Workqueue -> "workqueue"
+  }
+}
+
+fn optional_field(
+  options: List(#(b, json.Json)),
+  key: b,
+  value: Option(a),
+  mapper: fn(a) -> json.Json,
+) -> List(#(b, json.Json)) {
+  case value {
+    Some(value) -> [#(key, mapper(value)), ..options]
+    None -> options
+  }
+}
+
+fn json_payload(json: json.Json) {
+  json.to_string(json)
+  |> bit_array.from_string
+}
+
+fn decode_stream_api_error(
+  callback: fn() -> Decoder(Result(a, StreamApiError)),
+) -> Decoder(Result(a, StreamApiError)) {
+  use error <- decode.optional_field("error", None, {
+    use code <- decode.field("code", decode.int)
+    use description <- decode.optional_field("description", "", decode.string)
+    use err_code <- decode.optional_field("err_code", -1, decode.int)
+    decode.success(Some(StreamApiError(code, description, err_code)))
+  })
+  case error {
+    Some(error) -> decode.success(Error(error))
+    None -> callback()
+  }
+}
+
 pub type DeliveryInfo {
-  DeliveryInfo(stream_seq: Int, consumer_seq: Int, timestamp: Int)
+  DeliveryInfo(
+    stream_seq: Int,
+    consumer_seq: Int,
+    timestamp: Timestamp,
+    delivery_count: Int,
+    pending: Int,
+  )
+}
+
+// $JS.ACK.nmea.guppy_example.1.1029024.940949.1777365454785427545.0
+@internal
+pub fn parse_ack(value: String) -> Result(DeliveryInfo, Nil) {
+  case string.split(value, ".") {
+    [
+      "$JS",
+      "ACK",
+      _stream_name,
+      _consumer_name,
+      delivery_count,
+      stream_seq,
+      consumer_seq,
+      timestamp,
+      pending,
+    ] -> {
+      use stream_seq <- result.try(int.parse(stream_seq))
+      use consumer_seq <- result.try(int.parse(consumer_seq))
+      use timestamp <- result.try(int.parse(timestamp))
+      use delivery_count <- result.try(int.parse(delivery_count))
+      use pending <- result.try(int.parse(pending))
+
+      let timestamp =
+        timestamp.from_unix_seconds_and_nanoseconds(
+          timestamp / 1_000_000_000,
+          timestamp % 1_000_000_000,
+        )
+      Ok(DeliveryInfo(
+        stream_seq:,
+        consumer_seq:,
+        timestamp:,
+        delivery_count:,
+        pending:,
+      ))
+    }
+    _ -> Error(Nil)
+  }
+}
+
+pub type AckAction {
+  Ack
+  Nak
+  NakWithDelay(delay: duration.Duration)
+  Progress
+  Term
+}
+
+@internal
+pub fn ack_action_to_payload(action: AckAction) -> BitArray {
+  case action {
+    Ack -> <<>>
+    Nak -> <<"-NAK">>
+    NakWithDelay(delay:) -> {
+      let delay_ns = duration.to_milliseconds(delay) * 1_000_000
+      let delay_str = int.to_string(delay_ns)
+      <<"-NAK {\"delay\": ":utf8, delay_str:utf8, "}":utf8>>
+    }
+    Progress -> <<"+WIP">>
+    Term -> <<"+TERM">>
+  }
 }
