@@ -59,6 +59,8 @@ import gleam/time/duration.{type Duration}
 import gleam/time/timestamp.{type Timestamp}
 import guppy.{type NatsMessage, NatsMessage}
 
+// ── Context ─────────────────────────────────────────────────────────────────
+
 pub opaque type JetstreamContext {
   JetstreamContext(
     conn: Subject(guppy.Message),
@@ -78,6 +80,8 @@ pub fn with_logger(
   JetstreamContext(..js, log:)
 }
 
+// ── Errors ──────────────────────────────────────────────────────────────────
+
 pub type JetstreamError {
   ConnectionError(guppy.NatsError)
   ResponseDecodeError(json.DecodeError, input: BitArray)
@@ -90,390 +94,11 @@ pub type JetstreamError {
   MessageTooLarge
 }
 
-pub fn list_stream_names(
-  js: JetstreamContext,
-) -> Result(StreamNamesResponse, JetstreamError) {
-  let assert Ok(msg) =
-    guppy.request(
-      js.conn,
-      list_stream_names_request(None, None),
-      js.request_timeout,
-    )
-
-  decode_response(js, msg, stream_names_response_decoder())
+pub type StreamApiError {
+  StreamApiError(code: Int, description: String, err_code: Int)
 }
 
-pub fn create_stream(
-  js: JetstreamContext,
-  options: StreamOptions,
-) -> Result(StreamCreateResponse, JetstreamError) {
-  use msg <- make_request(js, stream_create_request(options))
-
-  use api_response <- result.try(decode_response(
-    js,
-    msg,
-    stream_create_response_decoder(),
-  ))
-  api_response
-  |> result.map_error(map_api_error)
-}
-
-pub fn get_info(
-  js: JetstreamContext,
-  stream: String,
-) -> Result(StreamGetInfoResponse, JetstreamError) {
-  use resp <- make_request(
-    js,
-    stream_get_info_request(
-      stream:,
-      deleted_details: False,
-      subjects_filter: None,
-      offset: 0,
-    ),
-  )
-  js.log(resp.payload |> bit_array.to_string |> result.unwrap("<<binary>>"))
-
-  use decoded_result <- result.try(decode_response(
-    js,
-    resp,
-    stream_get_info_response_decoder(),
-  ))
-  decoded_result
-  |> result.map_error(map_api_error)
-}
-
-fn make_request(
-  js: JetstreamContext,
-  msg: guppy.NatsMessage,
-  next: fn(guppy.NatsMessage) -> Result(a, JetstreamError),
-) -> Result(a, JetstreamError) {
-  case guppy.request(js.conn, msg, js.request_timeout) {
-    Ok(response) -> next(response)
-    Error(err) -> Error(ConnectionError(err))
-  }
-}
-
-pub fn delete_stream(
-  js: JetstreamContext,
-  stream: String,
-) -> Result(StreamDeleteResponse, JetstreamError) {
-  use msg <- make_request(js, stream_delete_request(stream))
-  use decoded_result <- result.try(decode_response(
-    js,
-    msg,
-    stream_delete_response_decoder(),
-  ))
-  decoded_result
-  |> result.map_error(map_api_error)
-}
-
-pub fn update_stream(
-  js: JetstreamContext,
-  options: StreamOptions,
-) -> Result(StreamGetInfoResponse, JetstreamError) {
-  use msg <- make_request(js, stream_update_request(options))
-  use decoded_result <- result.try(decode_response(
-    js,
-    msg,
-    stream_update_response_decoder(),
-  ))
-  decoded_result
-  |> result.map_error(map_api_error)
-}
-
-pub fn create_consumer(
-  js: JetstreamContext,
-  stream stream: String,
-  consumer_name consumer_name: String,
-  config config: ConsumerConfig,
-) -> Result(ConsumerCreateResponse, JetstreamError) {
-  use msg <- make_request(
-    js,
-    consumer_create_request(stream:, consumer_name:, config:),
-  )
-  use decoded_result <- result.try(decode_response(
-    js,
-    msg,
-    consumer_create_response_decoder(),
-  ))
-  decoded_result
-  |> result.map_error(map_api_error)
-}
-
-pub fn get_consumer_info(
-  js: JetstreamContext,
-  stream stream: String,
-  consumer_name consumer_name: String,
-) -> Result(ConsumerGetInfoResponse, JetstreamError) {
-  use msg <- make_request(
-    js,
-    consumer_get_info_request(stream:, consumer_name:),
-  )
-  use decoded_result <- result.try(decode_response(
-    js,
-    msg,
-    consumer_get_info_response_decoder(),
-  ))
-  decoded_result
-  |> result.map_error(map_api_error)
-}
-
-pub fn delete_consumer(
-  js: JetstreamContext,
-  stream stream: String,
-  consumer_name consumer_name: String,
-) -> Result(ConsumerDeleteResponse, JetstreamError) {
-  use msg <- make_request(js, consumer_delete_request(stream:, consumer_name:))
-  use decoded_result <- result.try(decode_response(
-    js,
-    msg,
-    consumer_delete_response_decoder(),
-  ))
-  decoded_result
-  |> result.map_error(map_api_error)
-}
-
-fn decode_response(js: JetstreamContext, msg: guppy.NatsMessage, decoder) {
-  js.log(msg |> string.inspect)
-  js.log(msg.payload |> bit_array.to_string |> result.unwrap("<<binary>>"))
-  json.parse_bits(msg.payload, decoder)
-  |> result.map_error(ResponseDecodeError(_, msg.payload))
-}
-
-fn map_api_error(err: StreamApiError) {
-  case err.err_code {
-    10_059 -> StreamNotFound
-    10_058 -> StreamAlreadyExistsWithDifferentConfig
-    10_014 -> ConsumerNotFound
-    10_071 -> WrongLastSequence
-    10_072 -> WrongLastSubjectSequence
-    10_074 -> MessageTooLarge
-    _ ->
-      ApiError(
-        code: err.code,
-        description: err.description,
-        err_code: err.err_code,
-      )
-  }
-}
-
-pub type PublishOptions {
-  PublishOptions(
-    msg_id: Option(String),
-    expected_stream: Option(String),
-    expected_last_seq: Option(Int),
-    expected_last_subject_seq: Option(Int),
-    timeout: Option(Int),
-  )
-}
-
-pub fn default_publish_options() -> PublishOptions {
-  PublishOptions(
-    msg_id: None,
-    expected_stream: None,
-    expected_last_seq: None,
-    expected_last_subject_seq: None,
-    timeout: None,
-  )
-}
-
-pub fn publish(
-  js: JetstreamContext,
-  subject: String,
-  payload: BitArray,
-  options: PublishOptions,
-) -> Result(PubAck, JetstreamError) {
-  let headers =
-    []
-    |> add_optional_header("Nats-Msg-Id", options.msg_id)
-    |> add_optional_header("Nats-Expected-Stream", options.expected_stream)
-    |> add_optional_int_header(
-      "Nats-Expected-Last-Sequence",
-      options.expected_last_seq,
-    )
-    |> add_optional_int_header(
-      "Nats-Expected-Last-Subject-Sequence",
-      options.expected_last_subject_seq,
-    )
-
-  let message = guppy.NatsMessage(subject:, reply_to: None, headers:, payload:)
-
-  let timeout = option.unwrap(options.timeout, js.request_timeout)
-
-  use msg <- make_request_with_timeout(js, message, timeout)
-  use decoded_result <- result.try(decode_response(js, msg, pub_ack_decoder()))
-  decoded_result
-  |> result.map_error(map_api_error)
-}
-
-fn add_optional_header(
-  headers: List(#(String, String)),
-  key: String,
-  value: Option(String),
-) -> List(#(String, String)) {
-  case value {
-    Some(v) -> [#(key, v), ..headers]
-    None -> headers
-  }
-}
-
-fn add_optional_int_header(
-  headers: List(#(String, String)),
-  key: String,
-  value: Option(Int),
-) -> List(#(String, String)) {
-  case value {
-    Some(v) -> [#(key, int.to_string(v)), ..headers]
-    None -> headers
-  }
-}
-
-fn make_request_with_timeout(
-  js: JetstreamContext,
-  msg: guppy.NatsMessage,
-  timeout: Int,
-  next: fn(guppy.NatsMessage) -> Result(a, JetstreamError),
-) -> Result(a, JetstreamError) {
-  case guppy.request(js.conn, msg, timeout) {
-    Ok(response) -> next(response)
-    Error(err) -> Error(ConnectionError(err))
-  }
-}
-
-@internal
-pub fn list_stream_names_request(
-  subject_filter: Option(String),
-  offset: Option(Int),
-) -> NatsMessage {
-  NatsMessage(
-    subject: "$JS.API.STREAM.NAMES",
-    reply_to: None,
-    headers: [],
-    payload: json_payload(json.object(
-      []
-      |> optional_field("offset", offset, json.int)
-      |> optional_field("subject", subject_filter, json.string),
-    )),
-  )
-}
-
-pub type StreamNamesResponse {
-  StreamNamesResponse(
-    total: Int,
-    offset: Int,
-    limit: Int,
-    streams: List(String),
-  )
-}
-
-@internal
-pub fn stream_names_response_decoder() -> Decoder(StreamNamesResponse) {
-  use total <- decode.field("total", decode.int)
-  use offset <- decode.field("offset", decode.int)
-  use limit <- decode.field("limit", decode.int)
-  use streams <- decode.field(
-    "streams",
-    decode.optional(decode.list(decode.string)),
-  )
-  decode.success(StreamNamesResponse(
-    total:,
-    offset:,
-    limit:,
-    streams: option.unwrap(streams, []),
-  ))
-}
-
-@internal
-pub fn stream_get_info_request(
-  stream stream: String,
-  deleted_details deleted_details: Bool,
-  subjects_filter subjects_filter: Option(String),
-  offset offset: Int,
-) -> NatsMessage {
-  NatsMessage(
-    subject: "$JS.API.STREAM.INFO." <> stream,
-    reply_to: None,
-    headers: [],
-    payload: json_payload(json.object(
-      [
-        #("deleted_details", json.bool(deleted_details)),
-        #("offset", json.int(offset)),
-      ]
-      |> optional_field("subject", subjects_filter, json.string),
-    )),
-  )
-}
-
-pub type StreamConfig {
-  StreamConfig(
-    name: String,
-    description: Option(String),
-    subjects: List(String),
-  )
-}
-
-fn stream_config_decoder() -> Decoder(StreamConfig) {
-  use name <- decode.field("name", decode.string)
-  use description <- decode.field("description", decode.optional(decode.string))
-  use subjects <- decode.field("subjects", decode.list(decode.string))
-  decode.success(StreamConfig(name:, description:, subjects:))
-}
-
-pub type StreamState {
-  StreamState(
-    messages: Int,
-    bytes: Int,
-    first_seq: Int,
-    first_ts: Timestamp,
-    last_seq: Int,
-    last_ts: Timestamp,
-    consumer_count: Int,
-  )
-}
-
-fn stream_state_decoder() -> Decoder(StreamState) {
-  let ts_decoder = decode_timestamp()
-  use messages <- decode.field("messages", decode.int)
-  use bytes <- decode.field("bytes", decode.int)
-  use first_seq <- decode.field("first_seq", decode.int)
-  use first_ts <- decode.field("first_ts", ts_decoder)
-  use last_seq <- decode.field("last_seq", decode.int)
-  use last_ts <- decode.field("last_ts", ts_decoder)
-  use consumer_count <- decode.field("consumer_count", decode.int)
-  decode.success(StreamState(
-    messages:,
-    bytes:,
-    first_seq:,
-    first_ts:,
-    last_seq:,
-    last_ts:,
-    consumer_count:,
-  ))
-}
-
-fn decode_timestamp() {
-  decode.then(decode.string, fn(ts_string) {
-    case timestamp.parse_rfc3339(ts_string) {
-      Ok(ts) -> decode.success(ts)
-      Error(_) -> decode.failure(timestamp.from_unix_seconds(0), "Timestamp")
-    }
-  })
-}
-
-@internal
-pub type StreamGetInfoResponse {
-  StreamGetInfoResponse(config: StreamConfig, state: StreamState)
-}
-
-@internal
-pub fn stream_get_info_response_decoder() -> Decoder(
-  Result(StreamGetInfoResponse, StreamApiError),
-) {
-  use <- decode_stream_api_error()
-  use config <- decode.field("config", stream_config_decoder())
-  use state <- decode.field("state", stream_state_decoder())
-  decode.success(Ok(StreamGetInfoResponse(config:, state:)))
-}
+// ── Stream Types ────────────────────────────────────────────────────────────
 
 /// How messages are retained in the stream.
 pub type Retention {
@@ -550,6 +175,197 @@ pub type StreamOptions {
   )
 }
 
+pub type StreamConfig {
+  StreamConfig(
+    name: String,
+    description: Option(String),
+    subjects: List(String),
+  )
+}
+
+pub type StreamState {
+  StreamState(
+    messages: Int,
+    bytes: Int,
+    first_seq: Int,
+    first_ts: Timestamp,
+    last_seq: Int,
+    last_ts: Timestamp,
+    consumer_count: Int,
+  )
+}
+
+pub type StreamNamesResponse {
+  StreamNamesResponse(
+    total: Int,
+    offset: Int,
+    limit: Int,
+    streams: List(String),
+  )
+}
+
+@internal
+pub type StreamGetInfoResponse {
+  StreamGetInfoResponse(config: StreamConfig, state: StreamState)
+}
+
+pub type StreamCreateResponse {
+  StreamCreated(name: String)
+}
+
+pub type StreamDeleteResponse {
+  StreamDeleteResponse(success: Bool)
+}
+
+// ── Stream API ───────────────────────────────────────────────────────────────
+
+pub fn list_stream_names(
+  js: JetstreamContext,
+) -> Result(StreamNamesResponse, JetstreamError) {
+  let assert Ok(msg) =
+    guppy.request(
+      js.conn,
+      list_stream_names_request(None, None),
+      js.request_timeout,
+    )
+
+  decode_response(js, msg, stream_names_response_decoder())
+}
+
+pub fn create_stream(
+  js: JetstreamContext,
+  options: StreamOptions,
+) -> Result(StreamCreateResponse, JetstreamError) {
+  use msg <- make_request(js, stream_create_request(options))
+
+  use api_response <- result.try(decode_response(
+    js,
+    msg,
+    stream_create_response_decoder(),
+  ))
+  api_response
+  |> result.map_error(map_api_error)
+}
+
+pub fn get_info(
+  js: JetstreamContext,
+  stream: String,
+) -> Result(StreamGetInfoResponse, JetstreamError) {
+  use resp <- make_request(
+    js,
+    stream_get_info_request(
+      stream:,
+      deleted_details: False,
+      subjects_filter: None,
+      offset: 0,
+    ),
+  )
+  js.log(resp.payload |> bit_array.to_string |> result.unwrap("<<binary>>"))
+
+  use decoded_result <- result.try(decode_response(
+    js,
+    resp,
+    stream_get_info_response_decoder(),
+  ))
+  decoded_result
+  |> result.map_error(map_api_error)
+}
+
+pub fn update_stream(
+  js: JetstreamContext,
+  options: StreamOptions,
+) -> Result(StreamGetInfoResponse, JetstreamError) {
+  use msg <- make_request(js, stream_update_request(options))
+  use decoded_result <- result.try(decode_response(
+    js,
+    msg,
+    stream_update_response_decoder(),
+  ))
+  decoded_result
+  |> result.map_error(map_api_error)
+}
+
+pub fn delete_stream(
+  js: JetstreamContext,
+  stream: String,
+) -> Result(StreamDeleteResponse, JetstreamError) {
+  use msg <- make_request(js, stream_delete_request(stream))
+  use decoded_result <- result.try(decode_response(
+    js,
+    msg,
+    stream_delete_response_decoder(),
+  ))
+  decoded_result
+  |> result.map_error(map_api_error)
+}
+
+// ── Stream Internal ─────────────────────────────────────────────────────────
+
+@internal
+pub fn list_stream_names_request(
+  subject_filter: Option(String),
+  offset: Option(Int),
+) -> NatsMessage {
+  NatsMessage(
+    subject: "$JS.API.STREAM.NAMES",
+    reply_to: None,
+    headers: [],
+    payload: json_payload(json.object(
+      []
+      |> optional_field("offset", offset, json.int)
+      |> optional_field("subject", subject_filter, json.string),
+    )),
+  )
+}
+
+@internal
+pub fn stream_names_response_decoder() -> Decoder(StreamNamesResponse) {
+  use total <- decode.field("total", decode.int)
+  use offset <- decode.field("offset", decode.int)
+  use limit <- decode.field("limit", decode.int)
+  use streams <- decode.field(
+    "streams",
+    decode.optional(decode.list(decode.string)),
+  )
+  decode.success(StreamNamesResponse(
+    total:,
+    offset:,
+    limit:,
+    streams: option.unwrap(streams, []),
+  ))
+}
+
+@internal
+pub fn stream_get_info_request(
+  stream stream: String,
+  deleted_details deleted_details: Bool,
+  subjects_filter subjects_filter: Option(String),
+  offset offset: Int,
+) -> NatsMessage {
+  NatsMessage(
+    subject: "$JS.API.STREAM.INFO." <> stream,
+    reply_to: None,
+    headers: [],
+    payload: json_payload(json.object(
+      [
+        #("deleted_details", json.bool(deleted_details)),
+        #("offset", json.int(offset)),
+      ]
+      |> optional_field("subject", subjects_filter, json.string),
+    )),
+  )
+}
+
+@internal
+pub fn stream_get_info_response_decoder() -> Decoder(
+  Result(StreamGetInfoResponse, StreamApiError),
+) {
+  use <- decode_stream_api_error()
+  use config <- decode.field("config", stream_config_decoder())
+  use state <- decode.field("state", stream_state_decoder())
+  decode.success(Ok(StreamGetInfoResponse(config:, state:)))
+}
+
 @internal
 pub fn stream_create_request(request: StreamOptions) -> NatsMessage {
   NatsMessage(
@@ -596,10 +412,6 @@ pub fn stream_delete_request(stream_name: String) -> NatsMessage {
   )
 }
 
-pub type StreamDeleteResponse {
-  StreamDeleteResponse(success: Bool)
-}
-
 @internal
 pub fn stream_delete_response_decoder() {
   use <- decode_stream_api_error()
@@ -644,6 +456,48 @@ pub fn stream_update_response_decoder() -> Decoder(
   decode.success(Ok(StreamGetInfoResponse(config:, state:)))
 }
 
+fn stream_config_decoder() -> Decoder(StreamConfig) {
+  use name <- decode.field("name", decode.string)
+  use description <- decode.field("description", decode.optional(decode.string))
+  use subjects <- decode.field("subjects", decode.list(decode.string))
+  decode.success(StreamConfig(name:, description:, subjects:))
+}
+
+fn stream_state_decoder() -> Decoder(StreamState) {
+  let ts_decoder = decode_timestamp()
+  use messages <- decode.field("messages", decode.int)
+  use bytes <- decode.field("bytes", decode.int)
+  use first_seq <- decode.field("first_seq", decode.int)
+  use first_ts <- decode.field("first_ts", ts_decoder)
+  use last_seq <- decode.field("last_seq", decode.int)
+  use last_ts <- decode.field("last_ts", ts_decoder)
+  use consumer_count <- decode.field("consumer_count", decode.int)
+  decode.success(StreamState(
+    messages:,
+    bytes:,
+    first_seq:,
+    first_ts:,
+    last_seq:,
+    last_ts:,
+    consumer_count:,
+  ))
+}
+
+fn retention_to_string(retention: Retention) -> String {
+  case retention {
+    Limits -> "limits"
+    Interest -> "interest"
+    Workqueue -> "workqueue"
+  }
+}
+
+fn storage_to_string(storage: Storage) -> String {
+  case storage {
+    File -> "file"
+    Memory -> "memory"
+  }
+}
+
 fn discard_policy_to_string(discard_policy: DiscardPolicy) -> String {
   case discard_policy {
     DiscardNew -> "new"
@@ -651,26 +505,7 @@ fn discard_policy_to_string(discard_policy: DiscardPolicy) -> String {
   }
 }
 
-pub type StreamApiError {
-  StreamApiError(code: Int, description: String, err_code: Int)
-}
-
-pub type StreamCreateResponse {
-  StreamCreated(name: String)
-}
-
-pub type PubAck {
-  PubAck(stream: String, seq: Int, duplicate: Bool)
-}
-
-@internal
-pub fn pub_ack_decoder() -> Decoder(Result(PubAck, StreamApiError)) {
-  use <- decode_stream_api_error()
-  use stream <- decode.field("stream", decode.string)
-  use seq <- decode.field("seq", decode.int)
-  use duplicate <- decode.optional_field("duplicate", False, decode.bool)
-  decode.success(Ok(PubAck(stream:, seq:, duplicate:)))
-}
+// ── Consumer Types ───────────────────────────────────────────────────────────
 
 /// Where the consumer should start delivering messages from.
 pub type DeliverPolicy {
@@ -696,27 +531,12 @@ pub type AckPolicy {
   AckExplicit
 }
 
-fn ack_policy_to_json(ack_policy: AckPolicy) -> json.Json {
-  case ack_policy {
-    NoAck -> json.string("none")
-    AckAll -> json.string("all")
-    AckExplicit -> json.string("explicit")
-  }
-}
-
 /// The rate at which messages are delivered to the consumer.
 pub type ReplayPolicy {
   /// Messages are delivered as fast as the consumer can process them.
   Instant
   /// Messages are delivered at the same rate they were originally received.
   Original
-}
-
-fn replay_policy_to_json(replay_policy: ReplayPolicy) -> json.Json {
-  case replay_policy {
-    Instant -> json.string("instant")
-    Original -> json.string("original")
-  }
 }
 
 pub type ConsumerConfig {
@@ -750,6 +570,89 @@ pub fn default_consumer_config() -> ConsumerConfig {
     replay_policy: Instant,
   )
 }
+
+pub type ConsumerCreateResponse {
+  ConsumerCreateResponse(
+    stream_name: String,
+    name: String,
+    created: Timestamp,
+    timestamp: Timestamp,
+  )
+}
+
+pub type ConsumerDeleteResponse {
+  ConsumerDeleteResponse(success: Bool)
+}
+
+pub type ConsumerGetInfoResponse {
+  ConsumerGetInfoResponse(
+    stream_name: String,
+    name: String,
+    config: ConsumerConfig,
+    created: Timestamp,
+    timestamp: Timestamp,
+    num_pending: Int,
+    num_ack_pending: Int,
+    num_redelivered: Int,
+    num_waiting: Int,
+  )
+}
+
+// ── Consumer API ─────────────────────────────────────────────────────────────
+
+pub fn create_consumer(
+  js: JetstreamContext,
+  stream stream: String,
+  consumer_name consumer_name: String,
+  config config: ConsumerConfig,
+) -> Result(ConsumerCreateResponse, JetstreamError) {
+  use msg <- make_request(
+    js,
+    consumer_create_request(stream:, consumer_name:, config:),
+  )
+  use decoded_result <- result.try(decode_response(
+    js,
+    msg,
+    consumer_create_response_decoder(),
+  ))
+  decoded_result
+  |> result.map_error(map_api_error)
+}
+
+pub fn get_consumer_info(
+  js: JetstreamContext,
+  stream stream: String,
+  consumer_name consumer_name: String,
+) -> Result(ConsumerGetInfoResponse, JetstreamError) {
+  use msg <- make_request(
+    js,
+    consumer_get_info_request(stream:, consumer_name:),
+  )
+  use decoded_result <- result.try(decode_response(
+    js,
+    msg,
+    consumer_get_info_response_decoder(),
+  ))
+  decoded_result
+  |> result.map_error(map_api_error)
+}
+
+pub fn delete_consumer(
+  js: JetstreamContext,
+  stream stream: String,
+  consumer_name consumer_name: String,
+) -> Result(ConsumerDeleteResponse, JetstreamError) {
+  use msg <- make_request(js, consumer_delete_request(stream:, consumer_name:))
+  use decoded_result <- result.try(decode_response(
+    js,
+    msg,
+    consumer_delete_response_decoder(),
+  ))
+  decoded_result
+  |> result.map_error(map_api_error)
+}
+
+// ── Consumer Internal ────────────────────────────────────────────────────────
 
 @internal
 pub fn consumer_create_request(
@@ -804,15 +707,6 @@ pub fn consumer_create_request(
   )
 }
 
-pub type ConsumerCreateResponse {
-  ConsumerCreateResponse(
-    stream_name: String,
-    name: String,
-    created: Timestamp,
-    timestamp: Timestamp,
-  )
-}
-
 @internal
 pub fn consumer_create_response_decoder() -> Decoder(
   Result(ConsumerCreateResponse, StreamApiError),
@@ -838,46 +732,6 @@ pub fn consumer_get_info_request(
     reply_to: None,
     headers: [],
     payload: bit_array.from_string(""),
-  )
-}
-
-@internal
-pub fn consumer_delete_request(
-  stream stream: String,
-  consumer_name consumer_name: String,
-) -> NatsMessage {
-  NatsMessage(
-    subject: "$JS.API.CONSUMER.DELETE." <> stream <> "." <> consumer_name,
-    reply_to: None,
-    headers: [],
-    payload: bit_array.from_string(""),
-  )
-}
-
-pub type ConsumerDeleteResponse {
-  ConsumerDeleteResponse(success: Bool)
-}
-
-@internal
-pub fn consumer_delete_response_decoder() -> Decoder(
-  Result(ConsumerDeleteResponse, StreamApiError),
-) {
-  use <- decode_stream_api_error()
-  use success <- decode.field("success", decode.bool)
-  decode.success(Ok(ConsumerDeleteResponse(success)))
-}
-
-pub type ConsumerGetInfoResponse {
-  ConsumerGetInfoResponse(
-    stream_name: String,
-    name: String,
-    config: ConsumerConfig,
-    created: Timestamp,
-    timestamp: Timestamp,
-    num_pending: Int,
-    num_ack_pending: Int,
-    num_redelivered: Int,
-    num_waiting: Int,
   )
 }
 
@@ -908,6 +762,28 @@ pub fn consumer_get_info_response_decoder() -> Decoder(
       num_waiting:,
     )),
   )
+}
+
+@internal
+pub fn consumer_delete_request(
+  stream stream: String,
+  consumer_name consumer_name: String,
+) -> NatsMessage {
+  NatsMessage(
+    subject: "$JS.API.CONSUMER.DELETE." <> stream <> "." <> consumer_name,
+    reply_to: None,
+    headers: [],
+    payload: bit_array.from_string(""),
+  )
+}
+
+@internal
+pub fn consumer_delete_response_decoder() -> Decoder(
+  Result(ConsumerDeleteResponse, StreamApiError),
+) {
+  use <- decode_stream_api_error()
+  use success <- decode.field("success", decode.bool)
+  decode.success(Ok(ConsumerDeleteResponse(success)))
 }
 
 fn consumer_config_decoder() -> Decoder(ConsumerConfig) {
@@ -1005,8 +881,38 @@ fn replay_policy_decoder() -> Decoder(ReplayPolicy) {
   })
 }
 
-fn duration_from_ns_decoder() -> Decoder(Duration) {
-  decode.then(decode.int, fn(ns) { decode.success(duration.nanoseconds(ns)) })
+fn ack_policy_to_json(ack_policy: AckPolicy) -> json.Json {
+  case ack_policy {
+    NoAck -> json.string("none")
+    AckAll -> json.string("all")
+    AckExplicit -> json.string("explicit")
+  }
+}
+
+fn replay_policy_to_json(replay_policy: ReplayPolicy) -> json.Json {
+  case replay_policy {
+    Instant -> json.string("instant")
+    Original -> json.string("original")
+  }
+}
+
+fn deliver_policy_to_json(policy: DeliverPolicy) -> List(#(String, json.Json)) {
+  case policy {
+    DeliverAll -> [#("deliver_policy", json.string("all"))]
+    DeliverNew -> [#("deliver_policy", json.string("new"))]
+    DeliverLast -> [#("deliver_policy", json.string("last"))]
+    DeliverByStartSequence(seq) -> [
+      #("deliver_policy", json.string("by_start_sequence")),
+      #("opt_start_seq", json.int(seq)),
+    ]
+    DeliverByStartTime(timestamp) -> [
+      #("deliver_policy", json.string("last")),
+      #(
+        "opt_start_time",
+        json.string(timestamp.to_rfc3339(timestamp, calendar.utc_offset)),
+      ),
+    ]
+  }
 }
 
 @internal
@@ -1030,76 +936,93 @@ pub fn consumer_pull_next_messages(
   )
 }
 
-fn duration_to_json(duration: Duration) -> json.Json {
-  let #(seconds, nano_seconds) = duration.to_seconds_and_nanoseconds(duration)
-  json.int(seconds * 1_000_000_000 + nano_seconds)
+// ── Publish ─────────────────────────────────────────────────────────────────
+
+pub type PublishOptions {
+  PublishOptions(
+    msg_id: Option(String),
+    expected_stream: Option(String),
+    expected_last_seq: Option(Int),
+    expected_last_subject_seq: Option(Int),
+    timeout: Option(Int),
+  )
 }
 
-fn deliver_policy_to_json(policy: DeliverPolicy) -> List(#(String, json.Json)) {
-  case policy {
-    DeliverAll -> [#("deliver_policy", json.string("all"))]
-    DeliverNew -> [#("deliver_policy", json.string("new"))]
-    DeliverLast -> [#("deliver_policy", json.string("last"))]
-    DeliverByStartSequence(seq) -> [
-      #("deliver_policy", json.string("by_start_sequence")),
-      #("opt_start_seq", json.int(seq)),
-    ]
-    DeliverByStartTime(timestamp) -> [
-      #("deliver_policy", json.string("last")),
-      #(
-        "opt_start_time",
-        json.string(timestamp.to_rfc3339(timestamp, calendar.utc_offset)),
-      ),
-    ]
-  }
+pub fn default_publish_options() -> PublishOptions {
+  PublishOptions(
+    msg_id: None,
+    expected_stream: None,
+    expected_last_seq: None,
+    expected_last_subject_seq: None,
+    timeout: None,
+  )
 }
 
-fn storage_to_string(storage: Storage) -> String {
-  case storage {
-    File -> "file"
-    Memory -> "memory"
-  }
+pub type PubAck {
+  PubAck(stream: String, seq: Int, duplicate: Bool)
 }
 
-fn retention_to_string(retention: Retention) -> String {
-  case retention {
-    Limits -> "limits"
-    Interest -> "interest"
-    Workqueue -> "workqueue"
-  }
+pub fn publish(
+  js: JetstreamContext,
+  subject: String,
+  payload: BitArray,
+  options: PublishOptions,
+) -> Result(PubAck, JetstreamError) {
+  let headers =
+    []
+    |> add_optional_header("Nats-Msg-Id", options.msg_id)
+    |> add_optional_header("Nats-Expected-Stream", options.expected_stream)
+    |> add_optional_int_header(
+      "Nats-Expected-Last-Sequence",
+      options.expected_last_seq,
+    )
+    |> add_optional_int_header(
+      "Nats-Expected-Last-Subject-Sequence",
+      options.expected_last_subject_seq,
+    )
+
+  let message = guppy.NatsMessage(subject:, reply_to: None, headers:, payload:)
+
+  let timeout = option.unwrap(options.timeout, js.request_timeout)
+
+  use msg <- make_request_with_timeout(js, message, timeout)
+  use decoded_result <- result.try(decode_response(js, msg, pub_ack_decoder()))
+  decoded_result
+  |> result.map_error(map_api_error)
 }
 
-fn optional_field(
-  options: List(#(b, json.Json)),
-  key: b,
-  value: Option(a),
-  mapper: fn(a) -> json.Json,
-) -> List(#(b, json.Json)) {
+@internal
+pub fn pub_ack_decoder() -> Decoder(Result(PubAck, StreamApiError)) {
+  use <- decode_stream_api_error()
+  use stream <- decode.field("stream", decode.string)
+  use seq <- decode.field("seq", decode.int)
+  use duplicate <- decode.optional_field("duplicate", False, decode.bool)
+  decode.success(Ok(PubAck(stream:, seq:, duplicate:)))
+}
+
+fn add_optional_header(
+  headers: List(#(String, String)),
+  key: String,
+  value: Option(String),
+) -> List(#(String, String)) {
   case value {
-    Some(value) -> [#(key, mapper(value)), ..options]
-    None -> options
+    Some(v) -> [#(key, v), ..headers]
+    None -> headers
   }
 }
 
-fn json_payload(json: json.Json) {
-  json.to_string(json)
-  |> bit_array.from_string
-}
-
-fn decode_stream_api_error(
-  callback: fn() -> Decoder(Result(a, StreamApiError)),
-) -> Decoder(Result(a, StreamApiError)) {
-  use error <- decode.optional_field("error", None, {
-    use code <- decode.field("code", decode.int)
-    use description <- decode.optional_field("description", "", decode.string)
-    use err_code <- decode.optional_field("err_code", -1, decode.int)
-    decode.success(Some(StreamApiError(code, description, err_code)))
-  })
-  case error {
-    Some(error) -> decode.success(Error(error))
-    None -> callback()
+fn add_optional_int_header(
+  headers: List(#(String, String)),
+  key: String,
+  value: Option(Int),
+) -> List(#(String, String)) {
+  case value {
+    Some(v) -> [#(key, int.to_string(v)), ..headers]
+    None -> headers
   }
 }
+
+// ── Delivery & Ack ──────────────────────────────────────────────────────────
 
 pub type DeliveryInfo {
   DeliveryInfo(
@@ -1170,4 +1093,103 @@ pub fn ack_action_to_payload(action: AckAction) -> BitArray {
     Progress -> <<"+WIP">>
     Term -> <<"+TERM">>
   }
+}
+
+// ── Internal Helpers ─────────────────────────────────────────────────────────
+
+fn make_request(
+  js: JetstreamContext,
+  msg: guppy.NatsMessage,
+  next: fn(guppy.NatsMessage) -> Result(a, JetstreamError),
+) -> Result(a, JetstreamError) {
+  case guppy.request(js.conn, msg, js.request_timeout) {
+    Ok(response) -> next(response)
+    Error(err) -> Error(ConnectionError(err))
+  }
+}
+
+fn make_request_with_timeout(
+  js: JetstreamContext,
+  msg: guppy.NatsMessage,
+  timeout: Int,
+  next: fn(guppy.NatsMessage) -> Result(a, JetstreamError),
+) -> Result(a, JetstreamError) {
+  case guppy.request(js.conn, msg, timeout) {
+    Ok(response) -> next(response)
+    Error(err) -> Error(ConnectionError(err))
+  }
+}
+
+fn decode_response(js: JetstreamContext, msg: guppy.NatsMessage, decoder) {
+  js.log(msg |> string.inspect)
+  js.log(msg.payload |> bit_array.to_string |> result.unwrap("<<binary>>"))
+  json.parse_bits(msg.payload, decoder)
+  |> result.map_error(ResponseDecodeError(_, msg.payload))
+}
+
+fn map_api_error(err: StreamApiError) {
+  case err.err_code {
+    10_059 -> StreamNotFound
+    10_058 -> StreamAlreadyExistsWithDifferentConfig
+    10_014 -> ConsumerNotFound
+    10_071 -> WrongLastSequence
+    10_072 -> WrongLastSubjectSequence
+    10_074 -> MessageTooLarge
+    _ ->
+      ApiError(
+        code: err.code,
+        description: err.description,
+        err_code: err.err_code,
+      )
+  }
+}
+
+fn decode_stream_api_error(
+  callback: fn() -> Decoder(Result(a, StreamApiError)),
+) -> Decoder(Result(a, StreamApiError)) {
+  use error <- decode.optional_field("error", None, {
+    use code <- decode.field("code", decode.int)
+    use description <- decode.optional_field("description", "", decode.string)
+    use err_code <- decode.optional_field("err_code", -1, decode.int)
+    decode.success(Some(StreamApiError(code, description, err_code)))
+  })
+  case error {
+    Some(error) -> decode.success(Error(error))
+    None -> callback()
+  }
+}
+
+fn decode_timestamp() {
+  decode.then(decode.string, fn(ts_string) {
+    case timestamp.parse_rfc3339(ts_string) {
+      Ok(ts) -> decode.success(ts)
+      Error(_) -> decode.failure(timestamp.from_unix_seconds(0), "Timestamp")
+    }
+  })
+}
+
+fn duration_to_json(duration: Duration) -> json.Json {
+  let #(seconds, nano_seconds) = duration.to_seconds_and_nanoseconds(duration)
+  json.int(seconds * 1_000_000_000 + nano_seconds)
+}
+
+fn duration_from_ns_decoder() -> Decoder(Duration) {
+  decode.then(decode.int, fn(ns) { decode.success(duration.nanoseconds(ns)) })
+}
+
+fn optional_field(
+  options: List(#(b, json.Json)),
+  key: b,
+  value: Option(a),
+  mapper: fn(a) -> json.Json,
+) -> List(#(b, json.Json)) {
+  case value {
+    Some(value) -> [#(key, mapper(value)), ..options]
+    None -> options
+  }
+}
+
+fn json_payload(json: json.Json) {
+  json.to_string(json)
+  |> bit_array.from_string
 }
