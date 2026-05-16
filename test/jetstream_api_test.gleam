@@ -45,7 +45,7 @@ pub fn consumer_delete_response_error_test() {
 
 pub fn stream_update_request_subject_test() {
   let request =
-    jetstream.StreamCreateRequest(
+    jetstream.StreamOptions(
       stream_name: "events",
       description: Some("updated stream"),
       subjects: ["foo.>", "bar.>"],

@@ -58,7 +58,7 @@ pub fn list_stream_names(
 
 pub fn create_stream(
   js: JetstreamContext,
-  options: StreamCreateRequest,
+  options: StreamOptions,
 ) -> Result(StreamCreateResponse, JetstreamError) {
   use msg <- make_request(js, stream_create_request(options))
 
@@ -122,7 +122,7 @@ pub fn delete_stream(
 
 pub fn update_stream(
   js: JetstreamContext,
-  options: StreamCreateRequest,
+  options: StreamOptions,
 ) -> Result(StreamGetInfoResponse, JetstreamError) {
   use msg <- make_request(js, stream_update_request(options))
   use decoded_result <- result.try(decode_response(
@@ -428,40 +428,83 @@ pub fn stream_get_info_response_decoder() -> Decoder(
   decode.success(Ok(StreamGetInfoResponse(config:, state:)))
 }
 
+/// How messages are retained in the stream.
 pub type Retention {
+  /// Messages are retained until storage limits are exceeded.
   Limits
+  /// Messages are retained until there are no consumers interested in them.
   Interest
+  /// Messages are retained until they are acknowledged by all consumers.
   Workqueue
 }
 
+/// Where stream data is persisted.
 pub type Storage {
+  /// Messages are stored on disk.
   File
+  /// Messages are stored in memory only.
   Memory
 }
 
+/// Behaviour when a stream limit is reached.
 pub type DiscardPolicy {
+  /// Reject new messages once limits are hit.
   DiscardNew
+  /// Remove oldest messages to make room for new ones.
   DiscardOld
 }
 
-pub type StreamCreateRequest {
-  StreamCreateRequest(
+/// Configuration for creating or updating a JetStream stream.
+///
+/// Used with `create_stream` and `update_stream` to define the properties
+/// of a NATS JetStream stream.
+///
+/// ## Example
+///
+/// ```gleam
+/// jetstream.StreamOptions(
+///   stream_name: "orders",
+///   description: option.Some("Order events"),
+///   subjects: ["orders.>"],
+///   retention: jetstream.Limits,
+///   discard_policy: jetstream.DiscardOld,
+///   max_consumers: -1,
+///   max_msgs: -1,
+///   max_bytes: -1,
+///   max_age: 0,
+///   storage: jetstream.Memory,
+///   num_replicas: 1,
+/// )
+/// ```
+pub type StreamOptions {
+  StreamOptions(
+    /// The name of the stream.
     stream_name: String,
+    /// Optional human-readable description of the stream.
     description: Option(String),
+    /// List of subjects this stream will capture messages for.
     subjects: List(String),
+    /// Message retention policy: how long messages are kept in the stream.
     retention: Retention,
+    /// Discard policy applied when limits are reached.
     discard_policy: DiscardPolicy,
+    /// Maximum number of consumers allowed on this stream (-1 for unlimited).
     max_consumers: Int,
+    /// Maximum number of messages the stream can hold (-1 for unlimited).
     max_msgs: Int,
+    /// Maximum total size in bytes the stream can consume (-1 for unlimited).
     max_bytes: Int,
+    /// Maximum age of messages in nanoseconds before they are removed (0 for unlimited).
     max_age: Int,
+    /// Storage backend used by the stream.
     storage: Storage,
+    /// Number of replicas for this stream (0 for default).
     num_replicas: Int,
   )
 }
 
 @internal
-pub fn stream_create_request(request: StreamCreateRequest) -> NatsMessage {
+pub fn stream_create_request(request: StreamOptions) -> NatsMessage {
   NatsMessage(
     subject: "$JS.API.STREAM.CREATE." <> request.stream_name,
     reply_to: None,
@@ -518,7 +561,7 @@ pub fn stream_delete_response_decoder() {
 }
 
 @internal
-pub fn stream_update_request(request: StreamCreateRequest) -> NatsMessage {
+pub fn stream_update_request(request: StreamOptions) -> NatsMessage {
   NatsMessage(
     subject: "$JS.API.STREAM.UPDATE." <> request.stream_name,
     reply_to: None,

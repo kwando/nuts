@@ -33,7 +33,7 @@ pub fn consumer_test() {
   let assert Ok(_) = jetstream.list_stream_names(conn)
 
   let stream_config =
-    jetstream.StreamCreateRequest(
+    jetstream.StreamOptions(
       stream_name: "my_stream",
       description: Some("hello world"),
       subjects: ["bar.*"],
@@ -110,7 +110,7 @@ pub fn consumer_test() {
   let assert Ok(updated) =
     jetstream.update_stream(
       conn,
-      jetstream.StreamCreateRequest(
+      jetstream.StreamOptions(
         ..stream_config,
         description: Some("updated description"),
         subjects: ["bar.*", "baz.*"],
@@ -157,7 +157,7 @@ pub fn consumer_test() {
   let assert Error(jetstream.StreamAlreadyExistsWithDifferentConfig) =
     jetstream.create_stream(
       conn,
-      jetstream.StreamCreateRequest(
+      jetstream.StreamOptions(
         ..stream_config,
         description: Some("this is another description"),
       ),
@@ -197,7 +197,7 @@ pub fn stream_publish_test() {
 
   // Create a memory-backed stream that captures messages on the "pub.test" subject.
   let stream_config =
-    jetstream.StreamCreateRequest(
+    jetstream.StreamOptions(
       stream_name: "pub_test_stream",
       description: None,
       subjects: ["pub.test"],
