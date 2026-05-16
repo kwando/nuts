@@ -134,16 +134,10 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
               use header_bytes <- with_int(header_bytes)
               use total_bytes <- with_int(total_bytes)
 
-              case read_body(rest, header_bytes - 2, default_max_payload) {
-                BodyReadSuccess(headers, rest) -> {
-                  case
-                    read_body(
-                      rest,
-                      total_bytes - header_bytes,
-                      default_max_payload,
-                    )
-                  {
-                    BodyReadSuccess(body, rest) -> {
+              case read_body(rest, total_bytes, default_max_payload) {
+                BodyReadSuccess(full_body, rest) -> {
+                  case split_hmsg_body(full_body, header_bytes) {
+                    Ok(#(headers, body)) -> {
                       case parse_headers(headers) {
                         Ok(headers) ->
                           Continue(
@@ -159,12 +153,10 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
                         Error(_) -> ProtocolError("malformed headers")
                       }
                     }
-                    BodyReadFail -> ProtocolError("malformed body")
-                    BodyTooShort -> NeedsMoreData
-                    OverMaxPayload -> ProtocolError("payload over max_payload")
+                    Error(Nil) -> ProtocolError("malformed body")
                   }
                 }
-                BodyReadFail -> ProtocolError("failed to read headers")
+                BodyReadFail -> ProtocolError("malformed body")
                 BodyTooShort -> NeedsMoreData
                 OverMaxPayload -> ProtocolError("payload over max_payload")
               }
@@ -173,16 +165,10 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
               use header_bytes <- with_int(header_bytes)
               use total_bytes <- with_int(total_bytes)
 
-              case read_body(rest, header_bytes - 2, default_max_payload) {
-                BodyReadSuccess(headers, rest) -> {
-                  case
-                    read_body(
-                      rest,
-                      total_bytes - header_bytes,
-                      default_max_payload,
-                    )
-                  {
-                    BodyReadSuccess(body, rest) -> {
+              case read_body(rest, total_bytes, default_max_payload) {
+                BodyReadSuccess(full_body, rest) -> {
+                  case split_hmsg_body(full_body, header_bytes) {
+                    Ok(#(headers, body)) -> {
                       case parse_headers(headers) {
                         Ok(headers) ->
                           Continue(
@@ -198,12 +184,10 @@ pub fn parse(buffer: BitArray) -> ProtocolReadResult {
                         Error(_) -> ProtocolError("malformed headers")
                       }
                     }
-                    BodyReadFail -> ProtocolError("malformed body")
-                    BodyTooShort -> NeedsMoreData
-                    OverMaxPayload -> ProtocolError("payload over max_payload")
+                    Error(Nil) -> ProtocolError("malformed body")
                   }
                 }
-                BodyReadFail -> ProtocolError("failed to read headers")
+                BodyReadFail -> ProtocolError("malformed body")
                 BodyTooShort -> NeedsMoreData
                 OverMaxPayload -> ProtocolError("payload over max_payload")
               }
@@ -256,18 +240,22 @@ fn parse_headers(headers: BitArray) {
   }
 }
 
-@external(erlang, "guppy_ffi", "match_crlf")
-fn find_crlf(buffer: BitArray) -> Result(Int, Nil)
+@external(erlang, "guppy_ffi", "split_crlf")
+fn split_crlf(buffer: BitArray) -> Result(#(BitArray, BitArray), Nil)
 
-/// Reads all bytes until it finds a CRLF
 fn read_line(buffer: BitArray) -> Result(#(BitArray, BitArray), Nil) {
-  case find_crlf(buffer) {
-    Ok(pos) ->
-      case buffer {
-        <<line:size(pos)-bytes, "\r\n", rest:bits>> -> Ok(#(line, rest))
-        _ -> Error(Nil)
-      }
-    Error(Nil) -> Error(Nil)
+  split_crlf(buffer)
+}
+
+fn split_hmsg_body(
+  full_body: BitArray,
+  header_bytes: Int,
+) -> Result(#(BitArray, BitArray), Nil) {
+  let header_content_size = header_bytes - 2
+  case full_body {
+    <<headers:size(header_content_size)-bytes, "\r\n", payload:bits>> ->
+      Ok(#(headers, payload))
+    _ -> Error(Nil)
   }
 }
 

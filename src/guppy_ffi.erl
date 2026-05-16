@@ -1,6 +1,6 @@
 -module(guppy_ffi).
 
--export([decode32/1, encode32/1, generate_key/1, sign/2, random_string/1, match_crlf/1]).
+-export([decode32/1, encode32/1, generate_key/1, sign/2, random_string/1, split_crlf/1]).
 
 decode32(Bin) ->
   try
@@ -12,17 +12,6 @@ decode32(Bin) ->
 
 encode32(Bin) ->
   base32:encode(Bin).
-
-%    type KeyType {
-%      Eddsa
-%    }
-%
-%    type KeyTypeHash {
-%      Ed25519
-%    }
-%
-%    @external(erlang, "crypto", "generate_key")
-%    fn generate_key(_: KeyType, _: KeyTypeHash, input: BitArray) -> BitArray
 
 generate_key(PrivKeyIn) ->
   try
@@ -42,10 +31,11 @@ random_string(Len) ->
   base32:encode(
     crypto:strong_rand_bytes(Len)).
 
-match_crlf(Binary) ->
+split_crlf(Binary) ->
   case binary:match(Binary, <<"\r\n">>) of
     {Pos, 2} ->
-      {ok, Pos};
+      <<Line:Pos/binary, "\r\n", Rest/binary>> = Binary,
+      {ok, {Line, Rest}};
     nomatch ->
       {error, nil}
   end.
