@@ -35,3 +35,6 @@ dev:
 serve_docs:
     gleam docs build
     caddy file-server --root build/dev/docs/guppy --browse
+
+docs_watch:
+    watchexec --debounce 5000 -w src "gleam docs build"
