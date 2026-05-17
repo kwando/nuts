@@ -857,8 +857,8 @@ fn revision_decoder() -> Decoder(Result(Int, KvApiError)) {
 
 fn make_request(
   ctx: KvContext,
-  msg: guppy.NatsMessage,
-  next: fn(guppy.NatsMessage) -> Result(a, KvError),
+  msg: NatsMessage,
+  next: fn(NatsMessage) -> Result(a, KvError),
 ) -> Result(a, KvError) {
   case guppy.request(ctx.conn, msg, ctx.request_timeout) {
     Ok(response) -> next(response)
@@ -868,7 +868,7 @@ fn make_request(
 
 fn decode_response(
   ctx: KvContext,
-  msg: guppy.NatsMessage,
+  msg: NatsMessage,
   decoder: Decoder(a),
 ) -> Result(a, KvError) {
   ctx.log(msg |> string.inspect)
@@ -887,7 +887,7 @@ fn decode_revision_response(payload: BitArray) -> Result(Int, KvError) {
 
 fn decode_entry_response(
   ctx: KvContext,
-  msg: guppy.NatsMessage,
+  msg: NatsMessage,
   bucket: String,
   key: String,
 ) -> Result(KeyValueEntry, KvError) {
@@ -930,7 +930,7 @@ fn decode_api_error(
   }
 }
 
-fn decode_timestamp() -> decode.Decoder(Timestamp) {
+fn decode_timestamp() -> Decoder(Timestamp) {
   decode.then(decode.string, fn(ts_string) {
     case timestamp.parse_rfc3339(ts_string) {
       Ok(ts) -> decode.success(ts)
