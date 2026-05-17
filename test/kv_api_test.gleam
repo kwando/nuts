@@ -157,12 +157,12 @@ pub fn entry_decoder_no_data_test() {
   assert entry.operation == kv.Put
 }
 
-pub fn entry_decoder_with_delete_headers_test() {
-  let headers_base64 =
-    bit_array.base64_encode(<<"KV-Operation: DEL\r\n">>, False)
+pub fn entry_decoder_with_delete_hdrs_test() {
+  let hdrs_base64 =
+    bit_array.base64_encode(<<"NATS/1.0\r\nKV-Operation: DEL\r\n\r\n">>, False)
   let payload_str =
-    "{\"seq\":3,\"data\":\"\",\"time\":\"2024-01-15T10:30:00.000000Z\",\"headers\":\""
-    <> headers_base64
+    "{\"seq\":3,\"data\":\"\",\"time\":\"2024-01-15T10:30:00.000000Z\",\"hdrs\":\""
+    <> hdrs_base64
     <> "\"}"
   let payload = bit_array.from_string(payload_str)
   let assert Ok(result) =
@@ -171,12 +171,15 @@ pub fn entry_decoder_with_delete_headers_test() {
   assert entry.operation == kv.Delete
 }
 
-pub fn entry_decoder_with_purge_headers_test() {
-  let headers_base64 =
-    bit_array.base64_encode(<<"KV-Operation: PURGE\r\n">>, False)
+pub fn entry_decoder_with_purge_hdrs_test() {
+  let hdrs_base64 =
+    bit_array.base64_encode(
+      <<"NATS/1.0\r\nKV-Operation: PURGE\r\n\r\n">>,
+      False,
+    )
   let payload_str =
-    "{\"seq\":3,\"data\":\"\",\"time\":\"2024-01-15T10:30:00.000000Z\",\"headers\":\""
-    <> headers_base64
+    "{\"seq\":3,\"data\":\"\",\"time\":\"2024-01-15T10:30:00.000000Z\",\"hdrs\":\""
+    <> hdrs_base64
     <> "\"}"
   let payload = bit_array.from_string(payload_str)
   let assert Ok(result) =
@@ -252,7 +255,7 @@ pub fn default_bucket_config_test() {
   assert config.compression == None
 }
 
-// ── Integration tests ────────────────────────────────────────────────────────
+// ── Integration tests (require NATS on 127.0.0.1:6789) ───────────────────────
 
 pub fn bucket_crud_test() {
   let assert Ok(actor.Started(_, conn)) =

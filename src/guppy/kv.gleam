@@ -1,29 +1,28 @@
-//// NATS Key-Value Store client for the Guppy library.
-////
-//// This module provides a high-level API for interacting with NATS KV buckets,
-//// including bucket management and key-value operations.
-////
-//// ## Quick start
-////
-//// ```gleam
-//// import guppy
-//// import guppy/kv
-////
-//// pub fn main() {
-////   let assert Ok(conn) = guppy.start(guppy.new("127.0.0.1", 4222))
-////   let ctx = kv.new_context(conn)
-////
-////   // Create a bucket
-////   let assert Ok(_) = kv.create_bucket(ctx, kv.default_bucket_config("my-bucket"))
-////
-////   // Put a value
-////   let assert Ok(rev) = kv.put(ctx, "my-bucket", "my-key", <<"hello">>)
-////
-////   // Get a value
-////   let assert Ok(entry) = kv.get(ctx, "my-bucket", "my-key")
-//// }
-//// ```
-
+/// NATS Key-Value Store client for the Guppy library.
+///
+/// This module provides a high-level API for interacting with NATS KV buckets,
+/// including bucket management and key-value operations.
+///
+/// ## Quick start
+///
+/// ```gleam
+/// import guppy
+/// import guppy/kv
+///
+/// pub fn main() {
+///   let assert Ok(conn) = guppy.start(guppy.new("127.0.0.1", 4222))
+///   let ctx = kv.new_context(conn)
+///
+///   // Create a bucket
+///   let assert Ok(_) = kv.create_bucket(ctx, kv.default_bucket_config("my-bucket"))
+///
+///   // Put a value
+///   let assert Ok(rev) = kv.put(ctx, "my-bucket", "my-key", <<"hello">>)
+///
+///   // Get a value
+///   let assert Ok(entry) = kv.get(ctx, "my-bucket", "my-key")
+/// }
+/// ```
 import gleam/bit_array
 import gleam/dynamic/decode.{type Decoder}
 import gleam/erlang/process.{type Subject}
@@ -46,10 +45,25 @@ pub opaque type KvContext {
   )
 }
 
+/// Create a new KV context bound to an active NATS connection.
+///
+/// The context holds the connection subject, a no-op logger, and a default
+/// request timeout of 5 seconds. Use `with_logger` to customise logging.
+///
+/// Parameters:
+/// - `conn`: The NATS connection actor subject returned by `guppy.start`.
 pub fn new_context(conn: Subject(guppy.Message)) -> KvContext {
   KvContext(conn, fn(_) -> Nil { Nil }, request_timeout: 5000)
 }
 
+/// Attach a logger function to a KV context.
+///
+/// The logger receives raw request/response payloads during API calls, useful
+/// for debugging and tracing JetStream API interactions.
+///
+/// Parameters:
+/// - `ctx`: The KV context to extend.
+/// - `log`: A function called with each logged message string.
 pub fn with_logger(ctx: KvContext, log: fn(String) -> Nil) -> KvContext {
   KvContext(..ctx, log:)
 }
@@ -97,6 +111,15 @@ pub type BucketConfig {
   )
 }
 
+/// Create a `BucketConfig` with sensible defaults.
+///
+/// Defaults: history=1, ttl=0, max_value_size=-1 (unlimited),
+/// max_bucket_size=-1 (unlimited), storage=Memory, replicas=1,
+/// compression=None.
+///
+/// Parameters:
+/// - `bucket_name`: The name of the KV bucket (used as the JetStream stream
+///   name prefix `KV_<name>`).
 pub fn default_bucket_config(bucket_name: String) -> BucketConfig {
   BucketConfig(
     bucket_name:,
@@ -144,6 +167,13 @@ pub type KeyValueEntry {
 
 // ── Key Validation ──────────────────────────────────────────────────────────
 
+/// Validate a KV key according to NATS KV naming rules.
+///
+/// Rejects empty keys, keys starting or ending with `'.'`, and keys
+/// containing spaces, `'*'`, or `'>'`. Returns `Ok(Nil)` for valid keys.
+///
+/// Parameters:
+/// - `key`: The key string to validate.
 @internal
 pub fn validate_key(key: String) -> Result(Nil, String) {
   case key {
@@ -173,6 +203,16 @@ pub fn validate_key(key: String) -> Result(Nil, String) {
 
 // ── Bucket API ───────────────────────────────────────────────────────────────
 
+/// Create a new KV bucket backed by a JetStream stream.
+///
+/// Sends `$JS.API.STREAM.CREATE.KV_<name>` with the bucket config as the
+/// stream configuration. Returns the created bucket status on success.
+///
+/// Parameters:
+/// - `ctx`: The KV context.
+/// - `config`: Bucket configuration (name, storage, history, etc.).
+///
+/// Errors: `BucketAlreadyExists` (10058), `ConnectionError`.
 pub fn create_bucket(
   ctx: KvContext,
   config: BucketConfig,
@@ -182,6 +222,15 @@ pub fn create_bucket(
   result.map_error(decoded, map_api_error)
 }
 
+/// Delete a KV bucket and all of its data.
+///
+/// Sends `$JS.API.STREAM.DELETE.KV_<name>`. This is irreversible.
+///
+/// Parameters:
+/// - `ctx`: The KV context.
+/// - `bucket`: The name of the bucket to delete.
+///
+/// Errors: `BucketNotFound` (10059), `ConnectionError`.
 pub fn delete_bucket(ctx: KvContext, bucket: String) -> Result(Nil, KvError) {
   use msg <- make_request(ctx, bucket_delete_request(bucket))
   case decode_response(ctx, msg, delete_response_decoder()) {
@@ -190,6 +239,16 @@ pub fn delete_bucket(ctx: KvContext, bucket: String) -> Result(Nil, KvError) {
   }
 }
 
+/// Get information about a KV bucket.
+///
+/// Sends `$JS.API.STREAM.INFO.KV_<name>` and returns the current bucket
+/// status including message count, byte count, and sequence numbers.
+///
+/// Parameters:
+/// - `ctx`: The KV context.
+/// - `bucket`: The name of the bucket to query.
+///
+/// Errors: `BucketNotFound` (10059), `ConnectionError`.
 pub fn get_bucket_info(
   ctx: KvContext,
   bucket: String,
@@ -199,17 +258,42 @@ pub fn get_bucket_info(
   result.map_error(decoded, map_api_error)
 }
 
+/// List all KV bucket names visible to this NATS connection.
+///
+/// Sends `$JS.API.STREAM.NAMES` filtered to streams with the `KV_` prefix.
+/// Non-KV streams are excluded from the result.
+///
+/// Parameters:
+/// - `ctx`: The KV context.
+///
+/// Errors: `ConnectionError`.
 pub fn list_bucket_names(ctx: KvContext) -> Result(List(String), KvError) {
-  let assert Ok(msg) =
+  case
     guppy.request(ctx.conn, list_bucket_names_request(), ctx.request_timeout)
-  case decode_response(ctx, msg, bucket_names_decoder()) {
-    Ok(names) -> Ok(names)
-    Error(err) -> Error(err)
+  {
+    Ok(msg) ->
+      case decode_response(ctx, msg, bucket_names_decoder()) {
+        Ok(names) -> Ok(names)
+        Error(err) -> Error(err)
+      }
+    Error(err) -> Error(ConnectionError(err))
   }
 }
 
 // ── Entry API ────────────────────────────────────────────────────────────────
 
+/// Insert or overwrite a key-value pair in a bucket.
+///
+/// Publishes the value to `$KV.<bucket>.<key>`. Returns the revision number
+/// assigned by JetStream for this write.
+///
+/// Parameters:
+/// - `ctx`: The KV context.
+/// - `bucket`: The bucket name.
+/// - `key`: The key (validated against NATS KV naming rules).
+/// - `value`: The value as a `BitArray` (any binary data).
+///
+/// Errors: `BadKey`, `ConnectionError`.
 pub fn put(
   ctx: KvContext,
   bucket: String,
@@ -226,6 +310,19 @@ pub fn put(
   })
 }
 
+/// Retrieve the latest value for a key.
+///
+/// Uses `$JS.API.STREAM.MSG.GET` with `last_by_subj` to fetch the most recent
+/// message for the key subject. Returns `KeyNotFound` if the latest message
+/// is a delete or purge marker.
+///
+/// Parameters:
+/// - `ctx`: The KV context.
+/// - `bucket`: The bucket name.
+/// - `key`: The key.
+///
+/// Errors: `BadKey`, `KeyNotFound` (10037), `BucketNotFound` (10059),
+/// `ConnectionError`.
 pub fn get(
   ctx: KvContext,
   bucket: String,
@@ -246,6 +343,20 @@ pub fn get(
   })
 }
 
+/// Retrieve a specific revision of a key by its sequence number.
+///
+/// Uses `$JS.API.STREAM.MSG.GET` with the sequence number (revision). This
+/// requires `history` > 1 on the bucket, otherwise old revisions are
+/// discarded.
+///
+/// Parameters:
+/// - `ctx`: The KV context.
+/// - `bucket`: The bucket name.
+/// - `key`: The key.
+/// - `revision`: The revision (JetStream sequence number) to fetch.
+///
+/// Errors: `BadKey`, `KeyNotFound` (10037), `BadRevision` (10071/10072),
+/// `BucketNotFound` (10059), `ConnectionError`.
 pub fn get_revision(
   ctx: KvContext,
   bucket: String,
@@ -266,6 +377,19 @@ pub fn get_revision(
   })
 }
 
+/// Create a key only if it does not already exist.
+///
+/// Sets the `Nats-Expected-Last-Subject-Sequence` header to `"0"`, which
+/// causes the publish to fail if the key already has any value. Returns the
+/// revision of the newly created entry.
+///
+/// Parameters:
+/// - `ctx`: The KV context.
+/// - `bucket`: The bucket name.
+/// - `key`: The key.
+/// - `value`: The initial value.
+///
+/// Errors: `BadKey`, `BadRevision` (key already exists), `ConnectionError`.
 pub fn create(
   ctx: KvContext,
   bucket: String,
@@ -288,6 +412,20 @@ pub fn create(
   })
 }
 
+/// Update a key only if it matches the expected revision.
+///
+/// Sets the `Nats-Expected-Last-Subject-Sequence` header to the provided
+/// revision, performing a CAS (compare-and-swap). Returns the new revision.
+///
+/// Parameters:
+/// - `ctx`: The KV context.
+/// - `bucket`: The bucket name.
+/// - `key`: The key.
+/// - `value`: The new value.
+/// - `revision`: The expected current revision; the update fails if the
+///   latest revision differs.
+///
+/// Errors: `BadKey`, `BadRevision` (10071/10072), `ConnectionError`.
 pub fn update(
   ctx: KvContext,
   bucket: String,
@@ -313,6 +451,17 @@ pub fn update(
   })
 }
 
+/// Mark a key as deleted by publishing a delete marker.
+///
+/// Publishes a zero-length message with `KV-Operation: DEL` header to the key
+/// subject. Subsequent `get` calls will return `KeyNotFound`.
+///
+/// Parameters:
+/// - `ctx`: The KV context.
+/// - `bucket`: The bucket name.
+/// - `key`: The key to delete.
+///
+/// Errors: `BadKey`, `ConnectionError`.
 pub fn delete_key(
   ctx: KvContext,
   bucket: String,
@@ -336,6 +485,18 @@ pub fn delete_key(
   })
 }
 
+/// Permanently remove all revisions of a key.
+///
+/// Publishes a purge marker (`KV-Operation: PURGE`), then sends a JetStream
+/// stream purge request filtered to the key's subject. This removes all
+/// historical revisions, not just the latest.
+///
+/// Parameters:
+/// - `ctx`: The KV context.
+/// - `bucket`: The bucket name.
+/// - `key`: The key to purge.
+///
+/// Errors: `BadKey`, `ConnectionError`.
 pub fn purge_key(
   ctx: KvContext,
   bucket: String,
@@ -368,14 +529,24 @@ pub fn purge_key(
 
 // ── Internal: Request Builders ───────────────────────────────────────────────
 
+/// Convert a bucket name to the backing JetStream stream name (`KV_<bucket>`).
 fn bucket_to_stream_name(bucket: String) -> String {
   "KV_" <> bucket
 }
 
+/// Convert a bucket name and key to a NATS subject (`$KV.<bucket>.<key>`).
 fn key_to_subject(bucket: String, key: String) -> String {
   "$KV." <> bucket <> "." <> key
 }
 
+/// Build a JetStream stream create request for a KV bucket.
+///
+/// Subject: `$JS.API.STREAM.CREATE.KV_<name>`.
+/// The payload includes retention=limits, discard=new, allow_direct=true,
+/// and allow_rollup_hdrs=true as required by NATS KV.
+///
+/// Parameters:
+/// - `config`: The bucket configuration.
 @internal
 pub fn bucket_create_request(config: BucketConfig) -> NatsMessage {
   let stream_name = bucket_to_stream_name(config.bucket_name)
@@ -410,6 +581,12 @@ pub fn bucket_create_request(config: BucketConfig) -> NatsMessage {
   )
 }
 
+/// Build a JetStream stream delete request for a KV bucket.
+///
+/// Subject: `$JS.API.STREAM.DELETE.KV_<name>`.
+///
+/// Parameters:
+/// - `bucket`: The bucket name (without `KV_` prefix).
 @internal
 pub fn bucket_delete_request(bucket: String) -> NatsMessage {
   let stream_name = bucket_to_stream_name(bucket)
@@ -421,6 +598,12 @@ pub fn bucket_delete_request(bucket: String) -> NatsMessage {
   )
 }
 
+/// Build a JetStream stream info request for a KV bucket.
+///
+/// Subject: `$JS.API.STREAM.INFO.KV_<name>`.
+///
+/// Parameters:
+/// - `bucket`: The bucket name (without `KV_` prefix).
 @internal
 pub fn bucket_info_request(bucket: String) -> NatsMessage {
   let stream_name = bucket_to_stream_name(bucket)
@@ -432,6 +615,10 @@ pub fn bucket_info_request(bucket: String) -> NatsMessage {
   )
 }
 
+/// Build a JetStream stream names request filtered to KV subjects.
+///
+/// Subject: `$JS.API.STREAM.NAMES`. Payload includes `{"subject": "$KV.>"}`
+/// to only return streams matching the KV subject pattern.
 @internal
 pub fn list_bucket_names_request() -> NatsMessage {
   NatsMessage(
@@ -444,6 +631,14 @@ pub fn list_bucket_names_request() -> NatsMessage {
   )
 }
 
+/// Build a JetStream direct-get-by-subject request.
+///
+/// Subject: `$JS.API.STREAM.MSG.GET.<stream_name>`.
+/// Payload: `{"last_by_subj": "<subject>"}`.
+///
+/// Parameters:
+/// - `stream_name`: The JetStream stream name (`KV_<bucket>`).
+/// - `subject`: The NATS subject within the stream to fetch the last message for.
 fn msg_get_by_subject_request(
   stream_name: String,
   subject: String,
@@ -460,6 +655,14 @@ fn msg_get_by_subject_request(
   )
 }
 
+/// Build a JetStream direct-get-by-sequence request.
+///
+/// Subject: `$JS.API.STREAM.MSG.GET.<stream_name>`.
+/// Payload: `{"seq": <sequence>}`.
+///
+/// Parameters:
+/// - `stream_name`: The JetStream stream name (`KV_<bucket>`).
+/// - `seq`: The sequence number (revision) to fetch.
 fn msg_get_by_seq_request(stream_name: String, seq: Int) -> NatsMessage {
   NatsMessage(
     subject: "$JS.API.STREAM.MSG.GET." <> stream_name,
@@ -469,6 +672,15 @@ fn msg_get_by_seq_request(stream_name: String, seq: Int) -> NatsMessage {
   )
 }
 
+/// Build a JetStream stream purge request filtered to a specific subject.
+///
+/// Subject: `$JS.API.STREAM.PURGE.<stream_name>`.
+/// Payload: `{"filter": "<subject>"}`.
+///
+/// Parameters:
+/// - `bucket`: The bucket name (used to derive the stream name).
+/// - `filter`: The subject filter — only messages matching this subject are
+///   purged.
 fn stream_purge_request(bucket: String, filter: String) -> NatsMessage {
   let stream_name = bucket_to_stream_name(bucket)
   NatsMessage(
@@ -481,6 +693,12 @@ fn stream_purge_request(bucket: String, filter: String) -> NatsMessage {
 
 // ── Internal: Decoders ────────────────────────────────────────────────────────
 
+/// Decode a JetStream `stream_info_response` into `BucketStatus`.
+///
+/// Extracts `config.name` (strips `KV_` prefix), `state.messages`,
+/// `state.bytes`, `state.first_seq`, `state.last_seq`, and
+/// `state.consumer_count`. Returns `Error(KvApiError)` if the response
+/// contains a top-level `error` field.
 @internal
 pub fn bucket_status_decoder() -> Decoder(Result(BucketStatus, KvApiError)) {
   use <- decode_api_error()
@@ -506,6 +724,10 @@ pub fn bucket_status_decoder() -> Decoder(Result(BucketStatus, KvApiError)) {
   )
 }
 
+/// Decode a JetStream `stream_names_response` into a list of bucket names.
+///
+/// Filters to streams with the `KV_` prefix and strips the prefix.
+/// Returns an empty list if the `streams` field is absent or null.
 @internal
 pub fn bucket_names_decoder() -> Decoder(List(String)) {
   use names <- decode.optional_field(
@@ -521,6 +743,9 @@ pub fn bucket_names_decoder() -> Decoder(List(String)) {
   )
 }
 
+/// Decode a JetStream delete/response into `Result(Nil, KvApiError)`.
+///
+/// Expects `{"success": true}` on success, or an `error` field on failure.
 @internal
 pub fn delete_response_decoder() -> Decoder(Result(Nil, KvApiError)) {
   use <- decode_api_error()
@@ -528,6 +753,15 @@ pub fn delete_response_decoder() -> Decoder(Result(Nil, KvApiError)) {
   decode.success(Ok(Nil))
 }
 
+/// Decode a KV entry from its raw JetStream message representation.
+///
+/// Fields: `seq` (revision), `data` (base64-decoded value, defaults to empty),
+/// `time` (RFC 3339 timestamp), `hdrs` (base64-encoded NATS headers for
+///  operation detection: DEL/PURGE/Put).
+///
+/// Parameters:
+/// - `bucket`: The bucket name to attach to the decoded entry.
+/// - `key`: The key name to attach to the decoded entry.
 @internal
 pub fn entry_decoder(
   bucket: String,
@@ -537,11 +771,7 @@ pub fn entry_decoder(
   use seq <- decode.field("seq", decode.int)
   use data <- decode.optional_field("data", <<>>, base64_data_decoder())
   use time <- decode.field("time", decode_timestamp())
-  use operation <- decode.optional_field(
-    "headers",
-    Put,
-    decode_headers_decoder(),
-  )
+  use operation <- decode.optional_field("hdrs", Put, decode_headers_decoder())
   decode.success(
     Ok(KeyValueEntry(
       bucket:,
@@ -553,6 +783,26 @@ pub fn entry_decoder(
       operation:,
     )),
   )
+}
+
+/// Decode a KV entry from the `$JS.API.STREAM.MSG.GET` response format.
+///
+/// The MSG.GET response wraps the entry fields inside a `"message"` envelope.
+/// This decoder unwraps it and delegates to `entry_decoder` for the inner
+/// fields.
+///
+/// Parameters:
+/// - `bucket`: The bucket name for the decoded entry.
+/// - `key`: The key name for the decoded entry.
+@internal
+pub fn direct_get_entry_decoder(
+  bucket: String,
+  key: String,
+) -> Decoder(Result(KeyValueEntry, KvApiError)) {
+  use <- decode_api_error()
+  decode.field("message", entry_decoder(bucket, key), fn(result) {
+    decode.success(result)
+  })
 }
 
 fn base64_data_decoder() -> Decoder(BitArray) {
@@ -641,7 +891,11 @@ fn decode_entry_response(
   bucket: String,
   key: String,
 ) -> Result(KeyValueEntry, KvError) {
-  use entry <- result.try(decode_response(ctx, msg, entry_decoder(bucket, key)))
+  use entry <- result.try(decode_response(
+    ctx,
+    msg,
+    direct_get_entry_decoder(bucket, key),
+  ))
   result.map_error(entry, map_api_error)
 }
 
@@ -676,7 +930,7 @@ fn decode_api_error(
   }
 }
 
-fn decode_timestamp() {
+fn decode_timestamp() -> decode.Decoder(Timestamp) {
   decode.then(decode.string, fn(ts_string) {
     case timestamp.parse_rfc3339(ts_string) {
       Ok(ts) -> decode.success(ts)
@@ -704,7 +958,7 @@ fn optional_field(
   }
 }
 
-fn json_payload(json: json.Json) {
+fn json_payload(json: json.Json) -> BitArray {
   json.to_string(json)
   |> bit_array.from_string
 }
