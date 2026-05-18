@@ -12,6 +12,7 @@ import guppy.{type Message} as nats
 import guppy/jetstream.{type DeliveryInfo}
 import guppy/jetstream/push_consumer
 import guppy/jetstream/simple_consumer
+import guppy/test_logger
 import guppy/test_utils
 
 pub fn consumer_test() {
@@ -296,6 +297,7 @@ pub fn push_consumer_test() {
 
   // Start push consumer that will receive all published messages
   let collector = process.new_subject()
+  let logger = test_logger.test_logger()
   let assert Ok(_) =
     push_consumer.start(
       conn,
@@ -305,7 +307,7 @@ pub fn push_consumer_test() {
         process.send(collector, msg.payload)
         push_consumer.ack()
       },
-      logger: None,
+      logger: Some(logger |> test_logger.to_guppy_logger),
     )
 
   let assert Ok(payload1) = process.receive(collector, 5000)
