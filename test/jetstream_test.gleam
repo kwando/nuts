@@ -305,6 +305,7 @@ pub fn push_consumer_test() {
         process.send(collector, msg.payload)
         push_consumer.ack()
       },
+      logger: None,
     )
 
   let assert Ok(payload1) = process.receive(collector, 5000)
