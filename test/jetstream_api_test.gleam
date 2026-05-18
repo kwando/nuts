@@ -176,6 +176,12 @@ pub fn all_optional_fields_test() {
       ]),
       inactive_threshold: Some(duration.minutes(5)),
       replay_policy: jetstream.Original,
+      deliver_subject: Some("_INBOX.push.test"),
+      deliver_group: Some("my-group"),
+      flow_control: True,
+      idle_heartbeat: Some(duration.seconds(10)),
+      ratelimit: Some(1_000_000),
+      headers_only: True,
     )
   let msg =
     jetstream.consumer_create_request(
@@ -199,6 +205,12 @@ pub fn all_optional_fields_test() {
   assert parsed.config.inactive_threshold == Some(300_000_000_000)
   let assert Some(backoff) = parsed.config.backoff
   assert backoff == [5_000_000_000, 30_000_000_000, 300_000_000_000]
+  assert parsed.config.deliver_subject == Some("_INBOX.push.test")
+  assert parsed.config.deliver_group == Some("my-group")
+  assert parsed.config.flow_control == True
+  assert parsed.config.idle_heartbeat == Some(10_000_000_000)
+  assert parsed.config.ratelimit == Some(1_000_000)
+  assert parsed.config.headers_only == True
 }
 
 pub fn ephemeral_omits_durable_name_test() {
@@ -216,6 +228,49 @@ pub fn ephemeral_omits_durable_name_test() {
   assert msg.subject == "$JS.API.CONSUMER.CREATE.events.ephemeral-1"
   let parsed = decode_payload(msg.payload)
   assert parsed.config.durable_name == None
+}
+
+pub fn push_fields_default_to_none_test() {
+  let config = jetstream.default_consumer_config()
+  let msg =
+    jetstream.consumer_create_request(
+      stream: "events",
+      consumer_name: "push-worker",
+      config:,
+    )
+  let parsed = decode_payload(msg.payload)
+  assert parsed.config.deliver_subject == None
+  assert parsed.config.deliver_group == None
+  assert parsed.config.flow_control == False
+  assert parsed.config.idle_heartbeat == None
+  assert parsed.config.ratelimit == None
+  assert parsed.config.headers_only == False
+}
+
+pub fn push_fields_serialized_when_set_test() {
+  let config =
+    jetstream.ConsumerConfig(
+      ..jetstream.default_consumer_config(),
+      deliver_subject: Some("_INBOX.push.abc123"),
+      deliver_group: Some("my-group"),
+      flow_control: True,
+      idle_heartbeat: Some(duration.seconds(10)),
+      ratelimit: Some(1_000_000),
+      headers_only: True,
+    )
+  let msg =
+    jetstream.consumer_create_request(
+      stream: "events",
+      consumer_name: "push-worker",
+      config:,
+    )
+  let parsed = decode_payload(msg.payload)
+  assert parsed.config.deliver_subject == Some("_INBOX.push.abc123")
+  assert parsed.config.deliver_group == Some("my-group")
+  assert parsed.config.flow_control == True
+  assert parsed.config.idle_heartbeat == Some(10_000_000_000)
+  assert parsed.config.ratelimit == Some(1_000_000)
+  assert parsed.config.headers_only == True
 }
 
 fn decode_payload(payload: BitArray) -> DecodedMessage {
@@ -261,6 +316,12 @@ type DecodedConfig {
     max_waiting: Option(Int),
     backoff: Option(List(Int)),
     inactive_threshold: Option(Int),
+    deliver_subject: Option(String),
+    deliver_group: Option(String),
+    flow_control: Bool,
+    idle_heartbeat: Option(Int),
+    ratelimit: Option(Int),
+    headers_only: Bool,
   )
 }
 
@@ -319,6 +380,28 @@ fn config_decoder() -> decode.Decoder(DecodedConfig) {
     None,
     decode.optional(decode.int),
   )
+  use deliver_subject <- decode.optional_field(
+    "deliver_subject",
+    None,
+    decode.optional(decode.string),
+  )
+  use deliver_group <- decode.optional_field(
+    "deliver_group",
+    None,
+    decode.optional(decode.string),
+  )
+  use flow_control <- decode.optional_field("flow_control", False, decode.bool)
+  use idle_heartbeat <- decode.optional_field(
+    "idle_heartbeat",
+    None,
+    decode.optional(decode.int),
+  )
+  use ratelimit <- decode.optional_field(
+    "ratelimit",
+    None,
+    decode.optional(decode.int),
+  )
+  use headers_only <- decode.optional_field("headers_only", False, decode.bool)
   decode.success(DecodedConfig(
     durable_name:,
     description:,
@@ -332,5 +415,11 @@ fn config_decoder() -> decode.Decoder(DecodedConfig) {
     max_waiting:,
     backoff:,
     inactive_threshold:,
+    deliver_subject:,
+    deliver_group:,
+    flow_control:,
+    idle_heartbeat:,
+    ratelimit:,
+    headers_only:,
   ))
 }

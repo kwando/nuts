@@ -11,6 +11,7 @@ import gleam/string
 import gleam_community/ansi
 import guppy.{type Message} as nats
 import guppy/jetstream.{type DeliveryInfo}
+import guppy/jetstream/push_consumer
 import guppy/jetstream/simple_consumer
 import guppy/test_utils
 
@@ -56,17 +57,11 @@ pub fn consumer_test() {
       stream: "my_stream",
       consumer_name:,
       config: jetstream.ConsumerConfig(
-        description: None,
+        ..jetstream.default_consumer_config(),
         durable: True,
         deliver_policy: jetstream.DeliverAll,
         ack_policy: jetstream.AckExplicit,
-        ack_wait: None,
         max_deliver: 10,
-        max_ack_pending: None,
-        max_waiting: None,
-        backoff: None,
-        inactive_threshold: None,
-        replay_policy: jetstream.Instant,
       ),
     )
 
@@ -103,7 +98,6 @@ pub fn consumer_test() {
         deliver_policy: jetstream.DeliverAll,
         ack_policy: jetstream.AckExplicit,
         max_deliver: 10,
-        replay_policy: jetstream.Instant,
       ),
     )
 
@@ -256,4 +250,106 @@ pub fn stream_publish_test() {
 
   // Clean up: remove the test stream so the test is self-contained.
   let assert Ok(_) = jetstream.delete_stream(js, "pub_test_stream")
+}
+
+pub fn push_consumer_test() {
+  let assert Ok(actor.Started(_, conn)) =
+    nats.new("127.0.0.1", 6789)
+    |> nats.start()
+
+  assert test_utils.await_connected(conn, 100)
+  let js = jetstream.new_context(conn)
+
+  let stream_name = "push_consumer_test_stream"
+  let _ = jetstream.delete_stream(js, stream_name)
+  let assert Ok(_) =
+    jetstream.create_stream(
+      js,
+      jetstream.StreamOptions(
+        stream_name:,
+        description: None,
+        subjects: ["push.test"],
+        retention: jetstream.Limits,
+        max_consumers: -1,
+        max_msgs: -1,
+        max_bytes: -1,
+        max_age: 0,
+        storage: jetstream.Memory,
+        num_replicas: 1,
+        discard_policy: jetstream.DiscardOld,
+      ),
+    )
+
+  // Create the consumer with a known deliver subject
+  let consumer_name = "push_test_consumer"
+  let deliver_subject = "_INBOX.push_test." <> nats.random_string(10)
+  let assert Ok(_) =
+    jetstream.create_consumer(
+      js,
+      stream: stream_name,
+      consumer_name:,
+      config: jetstream.ConsumerConfig(
+        ..jetstream.default_consumer_config(),
+        durable: True,
+        deliver_policy: jetstream.DeliverAll,
+        ack_policy: jetstream.AckExplicit,
+        max_deliver: 10,
+        deliver_subject: Some(deliver_subject),
+      ),
+    )
+
+  // Publish messages before starting the consumer
+  let assert Ok(_) =
+    jetstream.publish(
+      js,
+      "push.test",
+      <<"hello push">>,
+      jetstream.default_publish_options(),
+    )
+  let assert Ok(_) =
+    jetstream.publish(
+      js,
+      "push.test",
+      <<"world push">>,
+      jetstream.default_publish_options(),
+    )
+
+  // Start push consumer that will receive all published messages
+  let collector = process.new_subject()
+  let assert Ok(_) =
+    push_consumer.start(
+      conn,
+      deliver_subject:,
+      deliver_group: None,
+      handler: fn(msg, _info: DeliveryInfo) {
+        process.send(collector, msg.payload)
+        push_consumer.ack()
+      },
+    )
+
+  let assert Ok(payload1) = process.receive(collector, 5000)
+    as "first message not received"
+  assert payload1 == <<"hello push">>
+
+  let assert Ok(payload2) = process.receive(collector, 5000)
+    as "second message not received"
+  assert payload2 == <<"world push">>
+
+  // Test publishing additional messages to a push consumer
+  let assert Ok(_) =
+    jetstream.publish(
+      js,
+      "push.test",
+      <<"third message">>,
+      jetstream.default_publish_options(),
+    )
+
+  let assert Ok(payload3) = process.receive(collector, 5000)
+    as "third message not received"
+  assert payload3 == <<"third message">>
+
+  // Clean up
+  let assert Ok(_) =
+    jetstream.delete_consumer(js, stream: stream_name, consumer_name:)
+  let assert Ok(_) = jetstream.delete_stream(js, stream_name)
 }

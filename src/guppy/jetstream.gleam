@@ -552,6 +552,12 @@ pub type ConsumerConfig {
     backoff: Option(List(Duration)),
     inactive_threshold: Option(Duration),
     replay_policy: ReplayPolicy,
+    deliver_subject: Option(String),
+    deliver_group: Option(String),
+    flow_control: Bool,
+    idle_heartbeat: Option(Duration),
+    ratelimit: Option(Int),
+    headers_only: Bool,
   )
 }
 
@@ -568,6 +574,12 @@ pub fn default_consumer_config() -> ConsumerConfig {
     backoff: None,
     inactive_threshold: None,
     replay_policy: Instant,
+    deliver_subject: None,
+    deliver_group: None,
+    flow_control: False,
+    idle_heartbeat: None,
+    ratelimit: None,
+    headers_only: False,
   )
 }
 
@@ -699,6 +711,32 @@ pub fn consumer_create_request(
               "inactive_threshold",
               config.inactive_threshold,
               duration_to_json,
+            )
+            |> optional_field(
+              "deliver_subject",
+              config.deliver_subject,
+              json.string,
+            )
+            |> optional_field(
+              "deliver_group",
+              config.deliver_group,
+              json.string,
+            )
+            |> optional_field(
+              "flow_control",
+              Some(config.flow_control),
+              json.bool,
+            )
+            |> optional_field(
+              "idle_heartbeat",
+              config.idle_heartbeat,
+              duration_to_json,
+            )
+            |> optional_field("ratelimit", config.ratelimit, json.int)
+            |> optional_field(
+              "headers_only",
+              Some(config.headers_only),
+              json.bool,
             ),
           ),
         ),
@@ -826,6 +864,28 @@ fn consumer_config_decoder() -> Decoder(ConsumerConfig) {
     decode.optional(duration_from_ns_decoder()),
   )
   use replay_policy <- decode.field("replay_policy", replay_policy_decoder())
+  use deliver_subject <- decode.optional_field(
+    "deliver_subject",
+    None,
+    decode.optional(decode.string),
+  )
+  use deliver_group <- decode.optional_field(
+    "deliver_group",
+    None,
+    decode.optional(decode.string),
+  )
+  use flow_control <- decode.optional_field("flow_control", False, decode.bool)
+  use idle_heartbeat <- decode.optional_field(
+    "idle_heartbeat",
+    None,
+    decode.optional(duration_from_ns_decoder()),
+  )
+  use ratelimit <- decode.optional_field(
+    "ratelimit",
+    None,
+    decode.optional(decode.int),
+  )
+  use headers_only <- decode.optional_field("headers_only", False, decode.bool)
   decode.success(ConsumerConfig(
     description:,
     durable: durable_name != None,
@@ -838,6 +898,12 @@ fn consumer_config_decoder() -> Decoder(ConsumerConfig) {
     backoff:,
     inactive_threshold:,
     replay_policy:,
+    deliver_subject:,
+    deliver_group:,
+    flow_control:,
+    idle_heartbeat:,
+    ratelimit:,
+    headers_only:,
   ))
 }
 

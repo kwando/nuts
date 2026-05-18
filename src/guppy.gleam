@@ -112,6 +112,7 @@ pub opaque type Message {
     subject: String,
     subscriber: Subject(NatsMessage),
     reply: Subject(Result(Subscription, NatsError)),
+    queue_group: Option(String),
   )
   Request(
     message: NatsMessage,
@@ -160,6 +161,7 @@ type Subscriber {
     monitor: process.Monitor,
     subject: Subject(NatsMessage),
     pattern: String,
+    queue_group: Option(String),
   )
 }
 
@@ -300,8 +302,8 @@ fn handle_message(
     }
     Publish(msg, reply) -> handle_publish(state, msg, reply)
     SocketData(mug_message) -> handle_socket_data(mug_message, state)
-    Subscribe(subject:, subscriber:, reply:) ->
-      handle_subscribe(state, subscriber, subject, reply)
+    Subscribe(subject:, subscriber:, reply:, queue_group:) ->
+      handle_subscribe(state, subscriber, subject, reply, queue_group:)
     SubscriberDown(down) -> handle_subscriber_down(state, down)
     Unsubscribe(subscription, reply) ->
       handle_unsubscribe(state, subscription, reply)
@@ -416,6 +418,7 @@ fn handle_subscribe(
   subscriber: Subject(NatsMessage),
   subject: String,
   reply: Subject(Result(Subscription, NatsError)),
+  queue_group queue_group: Option(String),
 ) -> actor.Next(ClientState, a) {
   let sid = state.next_sid |> int.to_base36
   case process.subject_owner(subscriber) {
@@ -424,15 +427,19 @@ fn handle_subscribe(
 
       let state = ClientState(..state, next_sid: state.next_sid + 1)
       let subscriber =
-        Subscriber(sid:, monitor:, subject: subscriber, pattern: subject)
+        Subscriber(
+          sid:,
+          monitor:,
+          subject: subscriber,
+          pattern: subject,
+          queue_group:,
+        )
       actor.send(reply, Ok(Subscription(subscriber:)))
       let state =
         state
         |> update_subscribers(add_subscriber(_, subscriber))
 
-      case
-        send_bits(state, command.encode_sub(subject:, sid:, queue_group: None))
-      {
+      case send_bits(state, command.encode_sub(subject:, sid:, queue_group:)) {
         Ok(Nil) -> {
           actor.continue(state)
         }
@@ -760,7 +767,7 @@ fn resubscribe(state: ClientState) -> Result(ClientState, NatsError) {
         command.encode_sub(
           subject: subscriber.pattern,
           sid: subscriber.sid,
-          queue_group: None,
+          queue_group: subscriber.queue_group,
         ),
       )
     })
@@ -882,7 +889,26 @@ pub fn subscribe(
   nats_subject: String,
 ) -> Result(Subscription, NatsError) {
   let subscriber = process.new_subject()
-  actor.call(conn, actor_timeout, Subscribe(nats_subject, subscriber:, reply: _))
+  actor.call(conn, actor_timeout, Subscribe(
+    nats_subject,
+    subscriber:,
+    reply: _,
+    queue_group: None,
+  ))
+}
+
+pub fn subscribe_with_queue_group(
+  conn: Subject(Message),
+  nats_subject: String,
+  queue_group: String,
+) -> Result(Subscription, NatsError) {
+  let subscriber = process.new_subject()
+  actor.call(conn, actor_timeout, Subscribe(
+    nats_subject,
+    subscriber:,
+    reply: _,
+    queue_group: Some(queue_group),
+  ))
 }
 
 pub fn unsubscribe(conn: Subject(Message), subscription: Subscription) {

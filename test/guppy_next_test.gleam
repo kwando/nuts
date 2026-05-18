@@ -148,6 +148,25 @@ pub fn request_not_connected_test() {
     as "should not be connected"
 }
 
+pub fn subscribe_with_queue_group_test() {
+  let options = nats.new("127.0.0.1", 6789)
+  let assert Ok(Started(_, nats_conn)) = nats.start(options)
+  assert test_utils.await_connected(nats_conn, 5)
+
+  let assert Ok(sub) =
+    nats.subscribe_with_queue_group(nats_conn, "queue.test", "my-group")
+  let sub_subject = nats.get_subject(sub)
+
+  let assert Ok(_) =
+    nats.new_message("queue.test", <<"queue message">>)
+    |> nats.publish(nats_conn, _)
+
+  let assert Ok(msg) = process.receive(sub_subject, 1000)
+    as "queue message not received"
+  assert msg.subject == "queue.test"
+  assert msg.payload == <<"queue message">>
+}
+
 pub fn named_connection_test() {
   let name = process.new_name("test_name")
   let assert Ok(_) =
