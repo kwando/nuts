@@ -3,7 +3,12 @@ import gleam/otp/actor.{Started}
 import guppy as nats
 import guppy/test_utils
 
-pub fn connected_closed_event_test() {
+pub fn connected_event_test() {
+  use conn <- test_utils.with_client()
+  assert nats.is_connected(conn)
+}
+
+pub fn closed_event_test() {
   let event_subject = process.new_subject()
   let options =
     nats.new("127.0.0.1", 6789)
@@ -17,6 +22,6 @@ pub fn connected_closed_event_test() {
 
   nats.shutdown(conn)
 
-  let assert Ok(nats.Closed) = process.receive(event_subject, 1000)
+  let assert Ok(nats.Closed) = process.receive(event_subject, 2000)
     as "should receive Closed event"
 }

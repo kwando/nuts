@@ -142,6 +142,10 @@ pub opaque type Message {
   SocketData(mug.TcpMessage)
   SubscriberDown(process.Down)
   Unsubscribe(Subscription, Subject(Result(Nil, NatsError)))
+  DrainSubscription(Subscription, Subject(Result(Nil, NatsError)), Int)
+  DrainConnection(Subject(Result(Nil, NatsError)), Int)
+  DrainMarker(String, Subject(Result(Nil, NatsError)))
+  ConnectionDrainMarker(Subject(Result(Nil, NatsError)))
   Shutdown(Subject(Nil))
 }
 
@@ -168,6 +172,7 @@ type ClientState {
     ping_timer: Option(process.Timer),
     pong_timeout_timer: Option(process.Timer),
     authorized: Bool,
+    closing: Bool,
   )
 }
 
@@ -257,6 +262,7 @@ pub fn start(options: Options) {
       ping_timer: None,
       pong_timeout_timer: None,
       authorized: False,
+      closing: False,
     ))
     |> actor.selecting(
       process.new_selector()
@@ -323,6 +329,12 @@ fn handle_message(
     SubscriberDown(down) -> handle_subscriber_down(state, down)
     Unsubscribe(subscription, reply) ->
       handle_unsubscribe(state, subscription, reply)
+    DrainSubscription(subscription, reply, drain_timeout) ->
+      handle_drain_subscription(state, subscription, reply, drain_timeout)
+    DrainConnection(reply, drain_timeout) ->
+      handle_drain_connection(state, reply, drain_timeout)
+    DrainMarker(sid, reply) -> handle_drain_marker(state, sid, reply)
+    ConnectionDrainMarker(reply) -> handle_connection_drain_marker(state, reply)
     Request(message:, reply_subject:, reply:, timeout:) ->
       handle_request(state, message, reply, reply_subject, timeout)
 
@@ -412,6 +424,86 @@ fn handle_unsubscribe(
       actor.continue(state)
     }
   }
+}
+
+fn handle_drain_subscription(
+  state: ClientState,
+  subscription: Subscription,
+  reply: Subject(Result(Nil, NatsError)),
+  drain_timeout: Int,
+) -> actor.Next(ClientState, a) {
+  case get_subscriber_by_sid(state.subscribers, subscription.subscriber.sid) {
+    Ok(subscriber) -> {
+      case send_bits(state, command.encode_unsub(subscriber.sid, None)) {
+        Ok(_) -> {
+          process.send_after(
+            state.self,
+            drain_timeout,
+            DrainMarker(subscriber.sid, reply),
+          )
+          actor.continue(state)
+        }
+        Error(err) -> {
+          actor.send(reply, Error(err))
+          actor.continue(state)
+        }
+      }
+    }
+    Error(_) -> {
+      actor.send(reply, Error(GenericError("subscriber not found")))
+      actor.continue(state)
+    }
+  }
+}
+
+fn handle_drain_connection(
+  state: ClientState,
+  reply: Subject(Result(Nil, NatsError)),
+  drain_timeout: Int,
+) -> actor.Next(ClientState, a) {
+  let unsub_all =
+    state.subscribers.sids
+    |> dict.keys
+    |> list.map(fn(sid) { command.encode_unsub(sid, None) })
+    |> bit_array.concat
+
+  case send_bits(state, unsub_all) {
+    Ok(_) -> {
+      process.send_after(
+        state.self,
+        drain_timeout,
+        ConnectionDrainMarker(reply),
+      )
+      actor.continue(state)
+    }
+    Error(err) -> {
+      actor.send(reply, Error(err))
+      actor.continue(state)
+    }
+  }
+}
+
+fn handle_drain_marker(
+  state: ClientState,
+  sid: String,
+  reply: Subject(Result(Nil, NatsError)),
+) -> actor.Next(ClientState, a) {
+  actor.send(reply, Ok(Nil))
+  case get_subscriber_by_sid(state.subscribers, sid) {
+    Ok(subscriber) ->
+      actor.continue(
+        state |> update_subscribers(remove_subscriber(_, subscriber)),
+      )
+    Error(_) -> actor.continue(state)
+  }
+}
+
+fn handle_connection_drain_marker(
+  state: ClientState,
+  reply: Subject(Result(Nil, NatsError)),
+) -> actor.Next(ClientState, a) {
+  actor.send(reply, Ok(Nil))
+  actor.continue(close_connection(ClientState(..state, closing: True)))
 }
 
 fn handle_subscriber_down(
@@ -577,10 +669,28 @@ fn close_connection(state: ClientState) {
   case state.socket {
     Some(socket) -> {
       let _ = mug.shutdown(socket)
-      fire(state.options.on_connection_event, Disconnected)
-
-      ClientState(..state, socket: None, server_info: None, authorized: False)
-      |> schedule_reconnect
+      case state.closing {
+        True -> {
+          fire(state.options.on_connection_event, Closed)
+          ClientState(
+            ..state,
+            socket: None,
+            server_info: None,
+            authorized: False,
+            closing: False,
+          )
+        }
+        False -> {
+          fire(state.options.on_connection_event, Disconnected)
+          ClientState(
+            ..state,
+            socket: None,
+            server_info: None,
+            authorized: False,
+          )
+          |> schedule_reconnect
+        }
+      }
     }
     None -> state
   }
@@ -744,6 +854,7 @@ fn handle_server_message(
       )
     }
     protocol.Hmsg(topic:, headers:, sid:, reply_to:, payload:) -> {
+      state.logger.debug("RX HMSG topic=" <> topic <> " sid=" <> sid)
       broadcast_message(
         state,
         sid,
@@ -949,6 +1060,25 @@ pub fn subscribe_with_queue_group(
 
 pub fn unsubscribe(conn: Subject(Message), subscription: Subscription) {
   actor.call(conn, actor_timeout, Unsubscribe(subscription, _))
+}
+
+pub fn drain_subscription(
+  conn: Subject(Message),
+  subscription: Subscription,
+  milliseconds drain_timeout: Int,
+) -> Result(Nil, NatsError) {
+  actor.call(conn, actor_timeout, DrainSubscription(
+    subscription,
+    _,
+    drain_timeout,
+  ))
+}
+
+pub fn drain_connection(
+  conn: Subject(Message),
+  milliseconds drain_timeout: Int,
+) -> Result(Nil, NatsError) {
+  actor.call(conn, actor_timeout, DrainConnection(_, drain_timeout))
 }
 
 pub fn shutdown(conn: Subject(Message)) -> Nil {
