@@ -33,6 +33,7 @@ pub opaque type Options {
     ping_timeout: Int,
     logger: Logger,
     name: Option(process.Name(Message)),
+    on_connection_event: Option(Subject(ConnectionEvent)),
   )
 }
 
@@ -47,6 +48,7 @@ pub fn new(host: String, port: Int) -> Options {
     ping_timeout: 10_000,
     logger: noop_logger(),
     name: None,
+    on_connection_event: None,
   )
 }
 
@@ -84,6 +86,13 @@ pub fn with_ping_timeout(
   Options(..options, ping_timeout:)
 }
 
+pub fn on_connection_event(
+  options: Options,
+  subject: Subject(ConnectionEvent),
+) -> Options {
+  Options(..options, on_connection_event: Some(subject))
+}
+
 pub type NatsMessage {
   NatsMessage(
     subject: String,
@@ -102,6 +111,13 @@ pub type NatsError {
   BadURL
   RequestTimedOut
   NoResponders
+}
+
+pub type ConnectionEvent {
+  Connected
+  Disconnected
+  Closed
+  Errored(NatsError)
 }
 
 pub opaque type Message {
@@ -318,6 +334,7 @@ fn handle_message(
     }
     Shutdown(reply) -> {
       let _ = cancel_ping_timers(state)
+      fire(state.options.on_connection_event, Closed)
       actor.send(reply, Nil)
       actor.stop()
     }
@@ -547,12 +564,20 @@ fn encode_message(msg: NatsMessage) -> BitArray {
   }
 }
 
+fn fire(subject: Option(Subject(a)), msg: a) -> Nil {
+  case subject {
+    Some(s) -> process.send(s, msg)
+    None -> Nil
+  }
+}
+
 fn close_connection(state: ClientState) {
   let state = cancel_ping_timers(state)
   state.logger.debug("close connection")
   case state.socket {
     Some(socket) -> {
       let _ = mug.shutdown(socket)
+      fire(state.options.on_connection_event, Disconnected)
 
       ClientState(..state, socket: None, server_info: None, authorized: False)
       |> schedule_reconnect
@@ -697,8 +722,16 @@ fn handle_server_message(
         True -> Ok(state)
 
         False -> {
-          ClientState(..state, authorized: True)
-          |> resubscribe()
+          let result =
+            ClientState(..state, authorized: True)
+            |> resubscribe()
+          case result {
+            Ok(ready_state) -> {
+              fire(ready_state.options.on_connection_event, Connected)
+              Ok(ready_state)
+            }
+            Error(err) -> Error(err)
+          }
         }
       }
     }
@@ -718,7 +751,10 @@ fn handle_server_message(
       )
     }
     protocol.OK -> Ok(state)
-    protocol.ERR(error) -> Error(ProtocolError(error))
+    protocol.ERR(error) -> {
+      fire(state.options.on_connection_event, Errored(ProtocolError(error)))
+      Error(ProtocolError(error))
+    }
   }
 }
 

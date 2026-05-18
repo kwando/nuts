@@ -15,10 +15,14 @@ pub fn await_connected(subject: process.Subject(nats.Message), attempts: Int) {
 }
 
 pub fn with_client(callback: fn(process.Subject(nats.Message)) -> a) -> a {
+  let event_subject = process.new_subject()
   let assert Ok(actor.Started(_, conn)) =
     nats.new("127.0.0.1", 6789)
+    |> nats.on_connection_event(event_subject)
     |> nats.start()
 
-  await_connected(conn, 20)
+  let assert Ok(nats.Connected) = process.receive(event_subject, 5000)
+    as "timeout waiting for Connected event"
+
   callback(conn)
 }
