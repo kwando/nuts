@@ -5,7 +5,6 @@ import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/io
 import gleam/option.{None, Some}
-import gleam/otp/actor
 import gleam/result
 import gleam/string
 import gleam_community/ansi
@@ -16,18 +15,7 @@ import guppy/jetstream/simple_consumer
 import guppy/test_utils
 
 pub fn consumer_test() {
-  let assert Ok(actor.Started(_, conn)) =
-    nats.new("127.0.0.1", 6789)
-    //|> nats.with_logger(
-    //  nats.Logger(
-    //    info: fn(line) { io.println_error(ansi.cyan(line)) },
-    //    debug: fn(line) { io.println_error(ansi.cyan(line)) },
-    //    warning: fn(line) { io.println_error(ansi.cyan(line)) },
-    //  ),
-    //)
-    |> nats.start()
-
-  assert test_utils.await_connected(conn, 100)
+  use conn <- test_utils.with_client()
   let nats_conn = conn
   let conn = jetstream.new_context(conn)
 
@@ -182,11 +170,7 @@ fn producer_loop(conn: Subject(Message), subject: String, sleep: Int, gen) {
 }
 
 pub fn stream_publish_test() {
-  let assert Ok(actor.Started(_, conn)) =
-    nats.new("127.0.0.1", 6789)
-    |> nats.start()
-
-  assert test_utils.await_connected(conn, 100)
+  use conn <- test_utils.with_client()
   let js = jetstream.new_context(conn)
 
   // Create a memory-backed stream that captures messages on the "pub.test" subject.
@@ -253,11 +237,7 @@ pub fn stream_publish_test() {
 }
 
 pub fn push_consumer_test() {
-  let assert Ok(actor.Started(_, conn)) =
-    nats.new("127.0.0.1", 6789)
-    |> nats.start()
-
-  assert test_utils.await_connected(conn, 100)
+  use conn <- test_utils.with_client()
   let js = jetstream.new_context(conn)
 
   let stream_name = "push_consumer_test_stream"

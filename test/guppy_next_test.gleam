@@ -5,26 +5,23 @@ import guppy as nats
 import guppy/test_utils
 
 pub fn integration_test() {
-  let options = nats.new("127.0.0.1", 6789)
-  let assert Ok(Started(_, nats_conn)) = nats.start(options)
-
-  assert test_utils.await_connected(nats_conn, 5)
+  use conn <- test_utils.with_client()
 
   let assert Ok(_) =
     nats.new_message("foo", <<"foo">>)
-    |> nats.publish(nats_conn, _)
+    |> nats.publish(conn, _)
 
-  let assert Ok(message_subject) = nats.subscribe(nats_conn, "foo")
-  let assert Ok(message_subject2) = nats.subscribe(nats_conn, "foo")
+  let assert Ok(message_subject) = nats.subscribe(conn, "foo")
+  let assert Ok(message_subject2) = nats.subscribe(conn, "foo")
 
   let assert Ok(_) =
     nats.new_message("foo", <<"bar">>)
-    |> nats.publish(nats_conn, _)
+    |> nats.publish(conn, _)
   let assert Ok(_) =
     nats.new_message("foo", <<"baz">>)
     |> nats.add_header("content-type", "text/plain")
     |> nats.reply_to(Some("INBOX-2387131"))
-    |> nats.publish(nats_conn, _)
+    |> nats.publish(conn, _)
 
   let assert Ok(_) = process.receive(message_subject |> nats.get_subject, 1000)
     as "message not received"
@@ -80,17 +77,14 @@ pub fn invalid_user_pass_authorization_test() {
 }
 
 pub fn request_reply_test() {
-  let options = nats.new("127.0.0.1", 6789)
-
-  let assert Ok(Started(_, nats_conn)) = nats.start(options)
-  assert test_utils.await_connected(nats_conn, 5)
+  use conn <- test_utils.with_client()
 
   let echo_ready = process.new_subject()
   process.spawn(fn() {
-    let assert Ok(service_sub) = nats.subscribe(nats_conn, "echo")
+    let assert Ok(service_sub) = nats.subscribe(conn, "echo")
     let service_subject = nats.get_subject(service_sub)
     process.send(echo_ready, True)
-    echo_service(nats_conn, service_subject)
+    echo_service(conn, service_subject)
   })
 
   let assert Ok(True) = process.receive(echo_ready, 2000)
@@ -98,7 +92,7 @@ pub fn request_reply_test() {
 
   let assert Ok(reply) =
     nats.new_message("echo", <<"hello world">>)
-    |> nats.request(nats_conn, _, 1000)
+    |> nats.request(conn, _, 1000)
     as "request should succeed"
 
   assert reply.payload == <<"hello world">>
@@ -126,14 +120,11 @@ fn echo_service(
 }
 
 pub fn request_timeout_test() {
-  let options = nats.new("127.0.0.1", 6789)
-
-  let assert Ok(Started(_, nats_conn)) = nats.start(options)
-  assert test_utils.await_connected(nats_conn, 5)
+  use conn <- test_utils.with_client()
 
   assert Error(nats.NoResponders)
     == nats.new_message("no-one-is-here", <<"ping">>)
-    |> nats.request(nats_conn, _, 200)
+    |> nats.request(conn, _, 200)
     as "request should return no responders"
 }
 
@@ -149,17 +140,15 @@ pub fn request_not_connected_test() {
 }
 
 pub fn subscribe_with_queue_group_test() {
-  let options = nats.new("127.0.0.1", 6789)
-  let assert Ok(Started(_, nats_conn)) = nats.start(options)
-  assert test_utils.await_connected(nats_conn, 5)
+  use conn <- test_utils.with_client()
 
   let assert Ok(sub) =
-    nats.subscribe_with_queue_group(nats_conn, "queue.test", "my-group")
+    nats.subscribe_with_queue_group(conn, "queue.test", "my-group")
   let sub_subject = nats.get_subject(sub)
 
   let assert Ok(_) =
     nats.new_message("queue.test", <<"queue message">>)
-    |> nats.publish(nats_conn, _)
+    |> nats.publish(conn, _)
 
   let assert Ok(msg) = process.receive(sub_subject, 1000)
     as "queue message not received"
