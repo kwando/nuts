@@ -1,6 +1,7 @@
 import gleam/bit_array
 import gleam/dynamic/decode
 import gleam/json
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import guppy as nats
@@ -188,6 +189,33 @@ pub fn entry_decoder_with_purge_hdrs_test() {
   assert entry.operation == kv.Purge
 }
 
+pub fn bucket_keys_decoder_test() {
+  let payload =
+    bit_array.from_string(
+      "{\"state\":{\"subjects\":{\"$KV.my_bucket.key1\":{},\"$KV.my_bucket.key2\":{}}}}",
+    )
+  let assert Ok(result) =
+    json.parse_bits(payload, kv.bucket_keys_decoder("my_bucket"))
+  let assert Ok(keys) = result
+  assert keys == ["key1", "key2"]
+}
+
+pub fn bucket_keys_decoder_empty_state_test() {
+  let payload = bit_array.from_string("{\"state\":{}}")
+  let assert Ok(result) =
+    json.parse_bits(payload, kv.bucket_keys_decoder("my_bucket"))
+  let assert Ok(keys) = result
+  assert keys == []
+}
+
+pub fn bucket_keys_decoder_empty_subjects_test() {
+  let payload = bit_array.from_string("{\"state\":{\"subjects\":{}}}")
+  let assert Ok(result) =
+    json.parse_bits(payload, kv.bucket_keys_decoder("my_bucket"))
+  let assert Ok(keys) = result
+  assert keys == []
+}
+
 pub fn entry_decoder_error_test() {
   let payload =
     bit_array.from_string(
@@ -282,6 +310,47 @@ pub fn bucket_crud_test() {
   // Bucket should be gone
   let assert Error(kv.BucketNotFound) = kv.get_bucket_info(ctx, "test_bucket")
 
+  nats.shutdown(conn)
+}
+
+pub fn list_keys_test() {
+  let assert Ok(actor.Started(_, conn)) =
+    nats.new("127.0.0.1", 6789)
+    |> nats.start()
+  assert test_utils.await_connected(conn, 100)
+  let ctx = kv.new_context(conn)
+
+  // Delete any leftover bucket so we start fresh
+  let _ = kv.delete_bucket(ctx, "list_keys_bucket")
+
+  let config =
+    kv.BucketConfig(..kv.default_bucket_config("list_keys_bucket"), history: 5)
+  let assert Ok(_) = kv.create_bucket(ctx, config)
+
+  // No keys yet
+  let assert Ok(keys) = kv.list_keys(ctx, "list_keys_bucket")
+  assert keys == []
+
+  // Put a few keys
+  let assert Ok(_) = kv.put(ctx, "list_keys_bucket", "alpha", <<"1">>)
+  let assert Ok(_) = kv.put(ctx, "list_keys_bucket", "beta", <<"2">>)
+  let assert Ok(_) = kv.put(ctx, "list_keys_bucket", "gamma", <<"3">>)
+
+  let assert Ok(keys) = kv.list_keys(ctx, "list_keys_bucket")
+  assert list.contains(keys, "alpha")
+  assert list.contains(keys, "beta")
+  assert list.contains(keys, "gamma")
+
+  // Delete a key — the subject still appears in stream subjects (the
+  // delete marker is a message), so list_keys still includes it.
+  let assert Ok(_) = kv.delete_key(ctx, "list_keys_bucket", "beta")
+
+  let assert Ok(keys) = kv.list_keys(ctx, "list_keys_bucket")
+  assert list.contains(keys, "alpha")
+  assert list.contains(keys, "beta")
+  assert list.contains(keys, "gamma")
+
+  let assert Ok(_) = kv.delete_bucket(ctx, "list_keys_bucket")
   nats.shutdown(conn)
 }
 

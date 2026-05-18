@@ -21,9 +21,13 @@
 ///
 ///   // Get a value
 ///   let assert Ok(entry) = kv.get(ctx, "my-bucket", "my-key")
+///
+///   // List all keys in a bucket
+///   let assert Ok(keys) = kv.list_keys(ctx, "my-bucket")
 /// }
 /// ```
 import gleam/bit_array
+import gleam/dict
 import gleam/dynamic/decode.{type Decoder}
 import gleam/erlang/process.{type Subject}
 import gleam/int
@@ -278,6 +282,33 @@ pub fn list_bucket_names(ctx: KvContext) -> Result(List(String), KvError) {
       }
     Error(err) -> Error(ConnectionError(err))
   }
+}
+
+/// List all active keys in a KV bucket.
+///
+/// Fetches the stream info and extracts all unique subject names from
+/// `state.subjects`. Returns the keys with the `$KV.<bucket>.` prefix stripped.
+///
+/// Note: this returns all subjects known to the stream, including keys that
+/// have been deleted (delete markers remain as stream messages). Use `get` to
+/// verify a key still exists.
+///
+/// Parameters:
+/// - `ctx`: The KV context.
+/// - `bucket`: The bucket name.
+///
+/// Errors: `BucketNotFound` (10059), `ConnectionError`.
+pub fn list_keys(
+  ctx: KvContext,
+  bucket: String,
+) -> Result(List(String), KvError) {
+  use msg <- make_request(ctx, bucket_info_with_subjects_request(bucket))
+  use decoded <- result.try(decode_response(
+    ctx,
+    msg,
+    bucket_keys_decoder(bucket),
+  ))
+  result.map_error(decoded, map_api_error)
 }
 
 // ── Entry API ────────────────────────────────────────────────────────────────
@@ -615,6 +646,24 @@ pub fn bucket_info_request(bucket: String) -> NatsMessage {
   )
 }
 
+/// Build a JetStream stream info request that includes all subjects.
+///
+/// Subject: `$JS.API.STREAM.INFO.KV_<name>`.
+/// Payload includes `{"subjects_filter": ""}` to request subject details in
+/// `state.subjects`.
+///
+/// Parameters:
+/// - `bucket`: The bucket name (without `KV_` prefix).
+fn bucket_info_with_subjects_request(bucket: String) -> NatsMessage {
+  let stream_name = bucket_to_stream_name(bucket)
+  NatsMessage(
+    subject: "$JS.API.STREAM.INFO." <> stream_name,
+    reply_to: None,
+    headers: [],
+    payload: json_payload(json.object([#("subjects_filter", json.string(">"))])),
+  )
+}
+
 /// Build a JetStream stream names request filtered to KV subjects.
 ///
 /// Subject: `$JS.API.STREAM.NAMES`. Payload includes `{"subject": "$KV.>"}`
@@ -740,6 +789,38 @@ pub fn bucket_names_decoder() -> Decoder(List(String)) {
     names
     |> list.filter(fn(name) { string.starts_with(name, "KV_") })
     |> list.map(fn(name) { string.slice(name, 3, string.length(name) - 3) }),
+  )
+}
+
+/// Decode `state.subjects` from a stream info response into a list of key
+/// names by stripping the `$KV.<bucket>.` subject prefix.
+///
+/// Parameters:
+/// - `bucket`: The bucket name used to build the subject prefix filter.
+@internal
+pub fn bucket_keys_decoder(
+  bucket: String,
+) -> Decoder(Result(List(String), KvApiError)) {
+  use <- decode_api_error()
+  let prefix = "$KV." <> bucket <> "."
+  decode.then(
+    decode.at(
+      ["state"],
+      decode.optionally_at(
+        ["subjects"],
+        None,
+        decode.optional(decode.dict(decode.string, decode.dynamic)),
+      ),
+    ),
+    fn(subjects) {
+      let keys =
+        subjects
+        |> option.unwrap(dict.new())
+        |> dict.keys()
+        |> list.filter(fn(s) { string.starts_with(s, prefix) })
+        |> list.map(fn(s) { string.drop_start(s, string.length(prefix)) })
+      decode.success(Ok(keys))
+    },
   )
 }
 
