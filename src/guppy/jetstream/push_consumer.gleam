@@ -88,15 +88,11 @@ pub fn start(
     {
       Ok(subscription) -> {
         let handler_subject = nats.get_subject(subscription)
-        let logger = case logger {
-          Some(logger) -> logger
-          None -> nats.noop_logger()
-        }
         actor.initialised(PushConsumerState(
           self:,
           handler:,
           deliver_subject:,
-          logger:,
+          logger: option.lazy_unwrap(logger, nats.noop_logger),
           conn:,
           last_consumer_seq: None,
         ))

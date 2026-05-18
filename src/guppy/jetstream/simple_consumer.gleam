@@ -10,7 +10,7 @@ import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/json
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import gleam/string
@@ -75,8 +75,10 @@ pub fn start(
   max_messages max_messages: Int,
   threshold threshold: Int,
   handler handler: fn(NatsMessage, DeliveryInfo) -> HandlerReply,
+  logger logger: Option(Logger),
 ) -> Result(actor.Started(Nil), actor.StartError) {
   let inbox_prefix = "consumer." <> nats.random_string(10) <> "."
+
   actor.new_with_initialiser(1000, fn(self) {
     let assert Ok(subscription) = nats.subscribe(conn, inbox_prefix <> "*")
 
@@ -88,7 +90,7 @@ pub fn start(
       self:,
       pending: 0,
       handler:,
-      logger: nats.default_logger("simple_consumer: "),
+      logger: option.lazy_unwrap(logger, nats.noop_logger),
     ))
     |> actor.selecting(
       process.new_selector()

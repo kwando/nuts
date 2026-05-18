@@ -133,6 +133,7 @@ pub fn consumer_test() {
 
         simple_consumer.ack()
       },
+      logger: None,
     )
 
   process.sleep(200)
