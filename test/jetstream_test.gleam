@@ -238,6 +238,106 @@ pub fn stream_publish_test() {
   let assert Ok(_) = jetstream.delete_stream(js, "pub_test_stream")
 }
 
+pub fn stream_purge_test() {
+  use conn <- test_utils.with_client()
+  let js = jetstream.new_context(conn)
+
+  let stream_name = "purge_test_stream"
+  let _ = jetstream.delete_stream(js, stream_name)
+
+  let assert Ok(_) =
+    jetstream.create_stream(
+      js,
+      jetstream.StreamOptions(
+        stream_name:,
+        description: None,
+        subjects: ["purge.test"],
+        retention: jetstream.Limits,
+        max_consumers: -1,
+        max_msgs: -1,
+        max_bytes: -1,
+        max_age: 0,
+        storage: jetstream.Memory,
+        num_replicas: 1,
+        discard_policy: jetstream.DiscardOld,
+      ),
+    )
+
+  let assert Ok(_) =
+    jetstream.publish(
+      js,
+      "purge.test",
+      <<"before purge">>,
+      jetstream.default_publish_options(),
+    )
+
+  let assert Ok(info) = jetstream.get_info(js, stream_name)
+  assert info.state.messages == 1
+
+  let assert Ok(purge_result) = jetstream.purge_stream(js, stream_name, None)
+  assert purge_result.success == True
+  assert purge_result.purged == True
+
+  let assert Ok(info_after) = jetstream.get_info(js, stream_name)
+  assert info_after.state.messages == 0
+
+  let assert Ok(_) = jetstream.delete_stream(js, stream_name)
+}
+
+pub fn delete_message_test() {
+  use conn <- test_utils.with_client()
+  let js = jetstream.new_context(conn)
+
+  let stream_name = "delete_msg_test_stream"
+  let _ = jetstream.delete_stream(js, stream_name)
+
+  let assert Ok(_) =
+    jetstream.create_stream(
+      js,
+      jetstream.StreamOptions(
+        stream_name:,
+        description: None,
+        subjects: ["delete.msg"],
+        retention: jetstream.Limits,
+        max_consumers: -1,
+        max_msgs: -1,
+        max_bytes: -1,
+        max_age: 0,
+        storage: jetstream.Memory,
+        num_replicas: 1,
+        discard_policy: jetstream.DiscardOld,
+      ),
+    )
+
+  let assert Ok(_) =
+    jetstream.publish(
+      js,
+      "delete.msg",
+      <<"message 1">>,
+      jetstream.default_publish_options(),
+    )
+
+  let assert Ok(_) =
+    jetstream.publish(
+      js,
+      "delete.msg",
+      <<"message 2">>,
+      jetstream.default_publish_options(),
+    )
+
+  let assert Ok(info) = jetstream.get_info(js, stream_name)
+  assert info.state.messages == 2
+
+  let assert Ok(del) = jetstream.delete_message(js, stream_name, 1)
+  assert del.success == True
+
+  let assert Ok(info_after) = jetstream.get_info(js, stream_name)
+  assert info_after.state.messages == 1
+  assert info_after.state.first_seq == 2
+
+  let assert Ok(_) = jetstream.delete_stream(js, stream_name)
+}
+
 pub fn push_consumer_test() {
   use conn <- test_utils.with_client()
   let js = jetstream.new_context(conn)

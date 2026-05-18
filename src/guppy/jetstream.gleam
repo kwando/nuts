@@ -209,6 +209,14 @@ pub type StreamGetInfoResponse {
   StreamGetInfoResponse(config: StreamConfig, state: StreamState)
 }
 
+pub type StreamPurgeResponse {
+  StreamPurgeResponse(success: Bool, purged: Bool)
+}
+
+pub type DeleteMessageResponse {
+  DeleteMessageResponse(success: Bool)
+}
+
 pub type StreamCreateResponse {
   StreamCreated(name: String)
 }
@@ -294,6 +302,36 @@ pub fn delete_stream(
     js,
     msg,
     stream_delete_response_decoder(),
+  ))
+  decoded_result
+  |> result.map_error(map_api_error)
+}
+
+pub fn purge_stream(
+  js: JetstreamContext,
+  stream: String,
+  subject_filter: Option(String),
+) -> Result(StreamPurgeResponse, JetstreamError) {
+  use msg <- make_request(js, stream_purge_request(stream, subject_filter))
+  use decoded_result <- result.try(decode_response(
+    js,
+    msg,
+    stream_purge_response_decoder(),
+  ))
+  decoded_result
+  |> result.map_error(map_api_error)
+}
+
+pub fn delete_message(
+  js: JetstreamContext,
+  stream: String,
+  sequence: Int,
+) -> Result(DeleteMessageResponse, JetstreamError) {
+  use msg <- make_request(js, delete_message_request(stream, sequence))
+  use decoded_result <- result.try(decode_response(
+    js,
+    msg,
+    delete_message_response_decoder(),
   ))
   decoded_result
   |> result.map_error(map_api_error)
@@ -420,6 +458,57 @@ pub fn stream_delete_response_decoder() {
 }
 
 @internal
+pub fn stream_purge_request(
+  stream_name: String,
+  subject_filter: Option(String),
+) -> NatsMessage {
+  NatsMessage(
+    subject: "$JS.API.STREAM.PURGE." <> stream_name,
+    reply_to: None,
+    headers: [],
+    payload: case subject_filter {
+      Some(filter) ->
+        json_payload(
+          json.object([
+            #("filter", json.string(filter)),
+          ]),
+        )
+      None -> bit_array.from_string("")
+    },
+  )
+}
+
+fn stream_purge_response_decoder() -> Decoder(
+  Result(StreamPurgeResponse, StreamApiError),
+) {
+  use <- decode_stream_api_error()
+  use success <- decode.optional_field("success", True, decode.bool)
+  use purged_count <- decode.optional_field("purged", 0, decode.int)
+  decode.success(Ok(StreamPurgeResponse(success:, purged: purged_count > 0)))
+}
+
+@internal
+pub fn delete_message_request(
+  stream_name: String,
+  sequence: Int,
+) -> NatsMessage {
+  NatsMessage(
+    subject: "$JS.API.STREAM.MSG.DELETE." <> stream_name,
+    reply_to: None,
+    headers: [],
+    payload: json_payload(json.object([#("seq", json.int(sequence))])),
+  )
+}
+
+fn delete_message_response_decoder() -> Decoder(
+  Result(DeleteMessageResponse, StreamApiError),
+) {
+  use <- decode_stream_api_error()
+  use success <- decode.field("success", decode.bool)
+  decode.success(Ok(DeleteMessageResponse(success:)))
+}
+
+@internal
 pub fn stream_update_request(request: StreamOptions) -> NatsMessage {
   NatsMessage(
     subject: "$JS.API.STREAM.UPDATE." <> request.stream_name,
@@ -458,7 +547,11 @@ pub fn stream_update_response_decoder() -> Decoder(
 
 fn stream_config_decoder() -> Decoder(StreamConfig) {
   use name <- decode.field("name", decode.string)
-  use description <- decode.field("description", decode.optional(decode.string))
+  use description <- decode.optional_field(
+    "description",
+    None,
+    decode.optional(decode.string),
+  )
   use subjects <- decode.field("subjects", decode.list(decode.string))
   decode.success(StreamConfig(name:, description:, subjects:))
 }
