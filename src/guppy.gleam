@@ -142,8 +142,8 @@ pub opaque type Message {
   SocketData(mug.TcpMessage)
   SubscriberDown(process.Down)
   Unsubscribe(Subscription, Subject(Result(Nil, NatsError)))
-  DrainSubscription(Subscription, Subject(Result(Nil, NatsError)), Int)
-  DrainConnection(Subject(Result(Nil, NatsError)), Int)
+  DrainSubscription(Subscription, Int, Subject(Result(Nil, NatsError)))
+  DrainConnection(Int, Subject(Result(Nil, NatsError)))
   DrainMarker(String, Subject(Result(Nil, NatsError)))
   ConnectionDrainMarker(Subject(Result(Nil, NatsError)))
   Shutdown(Subject(Nil))
@@ -329,9 +329,9 @@ fn handle_message(
     SubscriberDown(down) -> handle_subscriber_down(state, down)
     Unsubscribe(subscription, reply) ->
       handle_unsubscribe(state, subscription, reply)
-    DrainSubscription(subscription, reply, drain_timeout) ->
+    DrainSubscription(subscription, drain_timeout, reply) ->
       handle_drain_subscription(state, subscription, reply, drain_timeout)
-    DrainConnection(reply, drain_timeout) ->
+    DrainConnection(drain_timeout, reply) ->
       handle_drain_connection(state, reply, drain_timeout)
     DrainMarker(sid, reply) -> handle_drain_marker(state, sid, reply)
     ConnectionDrainMarker(reply) -> handle_connection_drain_marker(state, reply)
@@ -1069,8 +1069,8 @@ pub fn drain_subscription(
 ) -> Result(Nil, NatsError) {
   actor.call(conn, actor_timeout, DrainSubscription(
     subscription,
-    _,
     drain_timeout,
+    _,
   ))
 }
 
@@ -1078,7 +1078,7 @@ pub fn drain_connection(
   conn: Subject(Message),
   milliseconds drain_timeout: Int,
 ) -> Result(Nil, NatsError) {
-  actor.call(conn, actor_timeout, DrainConnection(_, drain_timeout))
+  actor.call(conn, actor_timeout, DrainConnection(drain_timeout, _))
 }
 
 pub fn shutdown(conn: Subject(Message)) -> Nil {
