@@ -283,11 +283,11 @@ pub fn default_bucket_config_test() {
   assert config.compression == None
 }
 
-// ── Integration tests (require NATS on 127.0.0.1:6789) ───────────────────────
+// ── Integration tests (require NATS server) ──────────────────────────────────
 
 pub fn bucket_crud_test() {
   let assert Ok(actor.Started(_, conn)) =
-    nats.new("127.0.0.1", 6789)
+    nats.new(test_utils.nats_host, test_utils.nats_port)
     |> nats.start()
   assert test_utils.await_connected(conn, 100)
   let ctx = kv.new_context(conn)
@@ -315,7 +315,7 @@ pub fn bucket_crud_test() {
 
 pub fn list_keys_test() {
   let assert Ok(actor.Started(_, conn)) =
-    nats.new("127.0.0.1", 6789)
+    nats.new(test_utils.nats_host, test_utils.nats_port)
     |> nats.start()
   assert test_utils.await_connected(conn, 100)
   let ctx = kv.new_context(conn)
@@ -356,7 +356,7 @@ pub fn list_keys_test() {
 
 pub fn bucket_not_found_test() {
   let assert Ok(actor.Started(_, conn)) =
-    nats.new("127.0.0.1", 6789)
+    nats.new(test_utils.nats_host, test_utils.nats_port)
     |> nats.start()
   assert test_utils.await_connected(conn, 100)
   let ctx = kv.new_context(conn)

@@ -1,11 +1,12 @@
 import gleam/erlang/process
 import gleam/otp/actor.{Started}
 import guppy as nats
+import guppy/test_utils
 
 pub fn drain_subscription_test() {
   let event_subject = process.new_subject()
   let assert Ok(Started(_, conn)) =
-    nats.new("127.0.0.1", 6789)
+    nats.new(test_utils.nats_host, test_utils.nats_port)
     |> nats.on_connection_event(process.send(event_subject, _))
     |> nats.start()
 
@@ -37,7 +38,7 @@ pub fn drain_subscription_test() {
 pub fn drain_connection_test() {
   let event_subject = process.new_subject()
   let assert Ok(Started(_, conn)) =
-    nats.new("127.0.0.1", 6789)
+    nats.new(test_utils.nats_host, test_utils.nats_port)
     |> nats.on_connection_event(process.send(event_subject, _))
     |> nats.start()
 

@@ -3,6 +3,10 @@ import gleam/erlang/process
 import gleam/otp/actor
 import guppy as nats
 
+pub const nats_host = "127.0.0.1"
+
+pub const nats_port = 6789
+
 pub fn await_connected(subject: process.Subject(nats.Message), attempts: Int) {
   use <- bool.guard(when: attempts == 0, return: False)
   case nats.is_connected(subject) {
@@ -17,7 +21,7 @@ pub fn await_connected(subject: process.Subject(nats.Message), attempts: Int) {
 pub fn with_client(callback: fn(process.Subject(nats.Message)) -> a) -> a {
   let event_subject = process.new_subject()
   let assert Ok(actor.Started(_, conn)) =
-    nats.new("127.0.0.1", 6789)
+    nats.new(nats_host, nats_port)
     |> nats.on_connection_event(process.send(event_subject, _))
     |> nats.start()
 

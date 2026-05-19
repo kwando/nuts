@@ -47,7 +47,7 @@ pub fn bad_server_test() {
 
 pub fn nkey_authorization_test() {
   let options =
-    nats.new("127.0.0.1", 6789)
+    nats.new(test_utils.nats_host, test_utils.nats_port)
     |> nats.nkey_seed(
       "SUALHP366GCQN53R7X3MJF4BCNEK6WTKATRZ7QAMDC7UTVBMC2WYUDKK64",
     )
@@ -58,7 +58,7 @@ pub fn nkey_authorization_test() {
 
 pub fn user_pass_authorization_test() {
   let options =
-    nats.new("127.0.0.1", 6789)
+    nats.new(test_utils.nats_host, test_utils.nats_port)
     |> nats.username("alice")
     |> nats.password("secret")
 
@@ -68,7 +68,7 @@ pub fn user_pass_authorization_test() {
 
 pub fn invalid_user_pass_authorization_test() {
   let options =
-    nats.new("127.0.0.1", 6789)
+    nats.new(test_utils.nats_host, test_utils.nats_port)
     |> nats.username("alice")
     |> nats.password("wrongpassword")
 
@@ -159,7 +159,7 @@ pub fn subscribe_with_queue_group_test() {
 pub fn named_connection_test() {
   let name = process.new_name("test_name")
   let assert Ok(_) =
-    nats.new("127.0.0.1", 6789)
+    nats.new(test_utils.nats_host, test_utils.nats_port)
     |> nats.with_name(name)
     |> nats.start()
 
@@ -169,7 +169,7 @@ pub fn named_connection_test() {
 
 pub fn ping_keeps_connection_alive_test() {
   let options =
-    nats.new("127.0.0.1", 6789)
+    nats.new(test_utils.nats_host, test_utils.nats_port)
     |> nats.with_ping_interval(200)
     |> nats.with_ping_timeout(100)
 
