@@ -12,7 +12,7 @@ pub fn closed_event_test() {
   let event_subject = process.new_subject()
   let options =
     nats.new("127.0.0.1", 6789)
-    |> nats.on_connection_event(event_subject)
+    |> nats.on_connection_event(process.send(event_subject, _))
 
   let assert Ok(Started(_, conn)) = nats.start(options)
   assert test_utils.await_connected(conn, 10)

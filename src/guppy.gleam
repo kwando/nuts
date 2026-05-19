@@ -33,7 +33,7 @@ pub opaque type Options {
     ping_timeout: Int,
     logger: Logger,
     name: Option(process.Name(Message)),
-    on_connection_event: Option(Subject(ConnectionEvent)),
+    on_connection_event: Option(fn(ConnectionEvent) -> Nil),
   )
 }
 
@@ -88,7 +88,7 @@ pub fn with_ping_timeout(
 
 pub fn on_connection_event(
   options: Options,
-  subject: Subject(ConnectionEvent),
+  subject: fn(ConnectionEvent) -> Nil,
 ) -> Options {
   Options(..options, on_connection_event: Some(subject))
 }
@@ -656,9 +656,9 @@ fn encode_message(msg: NatsMessage) -> BitArray {
   }
 }
 
-fn fire(subject: Option(Subject(a)), msg: a) -> Nil {
+fn fire(subject: Option(fn(a) -> Nil), msg: a) -> Nil {
   case subject {
-    Some(s) -> process.send(s, msg)
+    Some(callback) -> callback(msg)
     None -> Nil
   }
 }
