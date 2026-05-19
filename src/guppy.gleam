@@ -22,6 +22,10 @@ pub fn random_string(length: Int) -> String
 
 const actor_timeout = 5000
 
+/// Opaque configuration for a NATS connection.
+///
+/// Built with `new` and customised via builder functions like `nkey_seed`,
+/// `username`, `with_ping_interval`, etc.
 pub opaque type Options {
   Options(
     host: String,
@@ -37,6 +41,19 @@ pub opaque type Options {
   )
 }
 
+/// Create a new connection configuration targeting a NATS server.
+///
+/// ## Arguments
+///
+/// * `host` — server hostname or IP address (default: `"127.0.0.1"`)
+/// * `port` — server port (default: `4222`)
+///
+/// ## Example
+///
+/// ```gleam
+/// nats.new("localhost", 4222)
+///   |> nats.start()
+/// ```
 pub fn new(host: String, port: Int) -> Options {
   Options(
     host:,
@@ -52,26 +69,43 @@ pub fn new(host: String, port: Int) -> Options {
   )
 }
 
+/// Configure NKey-based authentication.
+///
+/// `string` is the user seed (starts with `S`). The client derives a public key
+/// from the seed and signs the server nonce during the connect handshake.
 pub fn nkey_seed(options: Options, string: String) -> Options {
   Options(..options, nkey_seed: Some(string))
 }
 
+/// Set the username for plain-text user/password authentication.
 pub fn username(options: Options, string: String) -> Options {
   Options(..options, username: Some(string))
 }
 
+/// Set the password for plain-text user/password authentication.
 pub fn password(options: Options, string: String) -> Options {
   Options(..options, password: Some(string))
 }
 
+/// Attach a custom logger to the connection.
+///
+/// See `Logger` for the required shape and `default_logger` / `noop_logger`
+/// for built-in implementations.
 pub fn with_logger(options: Options, logger: Logger) {
   Options(..options, logger:)
 }
 
+/// Register the connection actor under a named process so it can be
+/// looked up later with `process.named_subject(name)` instead of passing
+/// around the `Subject(Message)` handle.
 pub fn with_name(options: Options, name: process.Name(Message)) -> Options {
   Options(..options, name: Some(name))
 }
 
+/// Set the interval between PING messages sent to the server.
+///
+/// If no PONG is received within `ping_timeout` the connection is closed.
+/// Default is 30 seconds.
 pub fn with_ping_interval(
   options: Options,
   milliseconds ping_interval: Int,
@@ -79,6 +113,9 @@ pub fn with_ping_interval(
   Options(..options, ping_interval:)
 }
 
+/// Set how long to wait for a PONG after sending a PING.
+///
+/// If the timeout fires the connection is closed. Default is 10 seconds.
 pub fn with_ping_timeout(
   options: Options,
   milliseconds ping_timeout: Int,
@@ -86,6 +123,8 @@ pub fn with_ping_timeout(
   Options(..options, ping_timeout:)
 }
 
+/// Register a subject that will receive `ConnectionEvent` notifications
+/// (Connected, Disconnected, Closed, Errored).
 pub fn on_connection_event(
   options: Options,
   subject: fn(ConnectionEvent) -> Nil,
@@ -93,6 +132,12 @@ pub fn on_connection_event(
   Options(..options, on_connection_event: Some(subject))
 }
 
+/// A message received from a NATS subscription.
+///
+/// * `subject` — the subject the message was published to
+/// * `reply_to` — present when the sender expects a reply (request-reply pattern)
+/// * `headers` — optional key/value header pairs
+/// * `payload` — the raw message body
 pub type NatsMessage {
   NatsMessage(
     subject: String,
@@ -102,21 +147,36 @@ pub type NatsMessage {
   )
 }
 
+/// Errors that can occur during NATS operations.
 pub type NatsError {
+  /// The connection has not completed the connect handshake.
   NotConnected
+  /// A low-level TCP / mug error occurred.
   NetworkError(mug.Error)
+  /// The server sent a malformed protocol message.
   ProtocolError(String)
+  /// NKey or user/password authentication was rejected.
   AuthenticationFailed
+  /// An uncategorised error with a human-readable description.
   GenericError(String)
+  /// The URL passed to `from_url` could not be parsed.
   BadURL
+  /// A request timed out waiting for a reply.
   RequestTimedOut
+  /// The server reported that no service is listening on the request subject.
   NoResponders
 }
 
+/// Lifecycle events emitted on the connection-event subject registered via
+/// `on_connection_event`.
 pub type ConnectionEvent {
+  /// The connection completed the connect handshake and is authorised.
   Connected
+  /// The TCP socket was lost and the actor is scheduling a reconnect.
   Disconnected
+  /// The connection was intentionally closed (e.g. via `shutdown` or `drain_connection`).
   Closed
+  /// A protocol-level error occurred.
   Errored(NatsError)
 }
 
@@ -186,10 +246,16 @@ type Subscriber {
   )
 }
 
+/// Opaque handle returned by `subscribe` and `subscribe_with_queue_group`.
+///
+/// Use `get_subject` to retrieve the underlying process subject that receives
+/// `NatsMessage` values, and pass this handle to `unsubscribe` or drain
+/// functions to tear down the subscription.
 pub opaque type Subscription {
   Subscription(subscriber: Subscriber)
 }
 
+/// Return the process subject that receives messages for a given subscription.
 pub fn get_subject(subscription: Subscription) {
   subscription.subscriber.subject
 }
@@ -243,6 +309,14 @@ fn update_subscribers(
 
 //------------------------------------------- NatsConnection -------------------------------------------
 
+/// Start a new NATS connection actor.
+///
+/// The actor will attempt to connect to the server specified in `options`
+/// and will automatically reconnect with exponential back-off if the
+/// connection is lost.
+///
+/// Returns `Ok(actor.Started(pid, subject))` on success. The `subject`
+/// is used for all subsequent client API calls (`publish`, `subscribe`, etc.).
 pub fn start(options: Options) {
   actor.new_with_initialiser(actor_timeout, fn(self) {
     actor.send(self, Connect)
@@ -285,6 +359,10 @@ fn apply_option(input: b, option: Option(a), callback: fn(b, a) -> b) -> b {
   }
 }
 
+/// Create a child specification suitable for use with `gleam/otp/supervision`.
+///
+/// This allows the NATS connection to be managed by a supervisor tree so it
+/// is automatically restarted if it crashes.
 pub fn supervised(
   name: process.Name(Message),
   options: Options,
@@ -292,6 +370,11 @@ pub fn supervised(
   supervision.worker(fn() { start(options |> with_name(name)) })
 }
 
+/// Parse a NATS server URL and produce connection options.
+///
+/// Extracts the host and port from the URI. Defaults to `127.0.0.1:4222`
+/// if those components are missing. Returns `Error(BadURL)` if the string
+/// is not a valid URI.
 pub fn from_url(url: String) {
   case uri.parse(url) {
     Ok(uri) ->
@@ -1006,24 +1089,36 @@ fn setup_connection(state: ClientState) {
   }
 }
 
-// message API
+/// Create a new message ready for publishing or sending as a request.
 pub fn new_message(subject: String, payload: BitArray) -> NatsMessage {
   NatsMessage(subject:, payload:, headers: [], reply_to: None)
 }
 
+/// Set the reply-to subject on a message.
+///
+/// Used in the request-reply pattern so the receiver knows where to send
+/// the response.
 pub fn reply_to(message: NatsMessage, reply_to: Option(String)) {
   NatsMessage(..message, reply_to:)
 }
 
+/// Add a header key/value pair to a message.
+///
+/// Headers are prepended, so the last call to `add_header` will appear
+/// first in the wire protocol.
 pub fn add_header(message: NatsMessage, header: String, value: String) {
   NatsMessage(..message, headers: [#(header, value), ..message.headers])
 }
 
-// --- client API
+/// Check whether the connection actor has completed the connect handshake
+/// and is authorised to send/receive messages.
 pub fn is_connected(subject: Subject(Message)) -> Bool {
   actor.call(subject, actor_timeout, IsConnected)
 }
 
+/// Publish a message to the NATS server.
+///
+/// Returns `Error(NotConnected)` if the connection is not yet established.
 pub fn publish(
   subject: Subject(Message),
   message: NatsMessage,
@@ -1031,6 +1126,11 @@ pub fn publish(
   actor.call(subject, actor_timeout, Publish(message, _))
 }
 
+/// Subscribe to a subject.
+///
+/// Returns a `Subscription` whose message subject (obtained via
+/// `get_subject`) will receive `NatsMessage` values for every matching
+/// publication.
 pub fn subscribe(
   conn: Subject(Message),
   nats_subject: String,
@@ -1044,6 +1144,10 @@ pub fn subscribe(
   ))
 }
 
+/// Subscribe to a subject as part of a named queue group.
+///
+/// The server will deliver each matching message to exactly one subscriber
+/// within the group, providing load-balanced message processing.
 pub fn subscribe_with_queue_group(
   conn: Subject(Message),
   nats_subject: String,
@@ -1058,10 +1162,19 @@ pub fn subscribe_with_queue_group(
   ))
 }
 
+/// Unsubscribe from a subject.
+///
+/// The subscription is removed immediately and no further messages will
+/// be delivered.
 pub fn unsubscribe(conn: Subject(Message), subscription: Subscription) {
   actor.call(conn, actor_timeout, Unsubscribe(subscription, _))
 }
 
+/// Drain a single subscription.
+///
+/// Sends an UNSUB to the server and removes the subscription after
+/// `drain_timeout` milliseconds, giving in-flight messages a chance
+/// to arrive before the subscription is torn down.
 pub fn drain_subscription(
   conn: Subject(Message),
   subscription: Subscription,
@@ -1074,6 +1187,11 @@ pub fn drain_subscription(
   ))
 }
 
+/// Drain the entire connection.
+///
+/// Unsubscribes all active subscriptions and closes the connection after
+/// `drain_timeout` milliseconds. A `Closed` event is emitted on the
+/// connection-event subject once the drain completes.
 pub fn drain_connection(
   conn: Subject(Message),
   milliseconds drain_timeout: Int,
@@ -1081,10 +1199,22 @@ pub fn drain_connection(
   actor.call(conn, actor_timeout, DrainConnection(drain_timeout, _))
 }
 
+/// Gracefully shut down the connection actor.
+///
+/// Cancels all timers, fires a `Closed` event, and stops the actor.
 pub fn shutdown(conn: Subject(Message)) -> Nil {
   actor.call(conn, actor_timeout, Shutdown)
 }
 
+/// Send a request message and wait for a reply.
+///
+/// Publishes the message with a unique inbox subject as the reply-to, then
+/// blocks (via `process.receive`) for up to `timeout` milliseconds waiting
+/// for the response.
+///
+/// Returns `Error(NoResponders)` if the server reports that no service is
+/// listening on the request subject, or `Error(RequestTimedOut)` if the
+/// deadline expires.
 pub fn request(
   conn: Subject(Message),
   message: NatsMessage,
@@ -1183,7 +1313,10 @@ fn cancel_ping_timers(state: ClientState) -> ClientState {
   cancel_pong_timeout(state)
 }
 
-// Logger
+/// A pluggable logger interface used by the connection actor.
+///
+/// Provide your own implementation or use `noop_logger()` /
+/// `default_logger(context)` for built-in options.
 pub type Logger {
   Logger(
     info: fn(String) -> Nil,
@@ -1200,11 +1333,15 @@ fn add_context(log: fn(String) -> Nil, context) {
   fn(line) { log(context <> line) }
 }
 
+/// A logger that discards all output. Useful when you don't want any
+/// logging from the connection actor.
 pub fn noop_logger() {
   let noop = fn(_) { Nil }
   Logger(info: noop, debug: noop, warning: noop)
 }
 
+/// A logger that writes all levels (info, debug, warning) to stderr
+/// with a `context` prefix on each line.
 pub fn default_logger(context: String) {
   let output = add_context(stderr_log, context)
   Logger(info: output, debug: output, warning: output)
