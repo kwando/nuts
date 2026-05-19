@@ -1,132 +1,81 @@
 import gleam/option.{None, Some}
-import gleeunit/should
-import guppy/internal/protocol.{Continue, Hmsg, NeedsMoreData}
+import gleam/string
+import guppy/internal/connect_options.{ConnectOptions, UserPassAuth}
+import guppy/internal/protocol
 
-pub fn parse_test() {
-  protocol.parse(<<"PING\r\n">>)
-  |> should.equal(Continue(protocol.Ping, <<>>))
+pub fn connect_with_user_pass_test() {
+  let json =
+    connect_options.to_json_string(ConnectOptions(
+      verbose: False,
+      pedantic: True,
+      tls_required: False,
+      lang: "gleam",
+      version: "0.0.1",
+      headers: True,
+      protocol: 0,
+      auth: UserPassAuth(user: "alice", pass: "secret"),
+      name: "guppy",
+      no_responders: True,
+    ))
 
-  protocol.parse(<<"MSG hello 12 11">>)
-  |> should.equal(NeedsMoreData)
-
-  protocol.parse(<<"MSG hello 12">>)
-  |> should.equal(NeedsMoreData)
-
-  protocol.parse(<<"MSG hello 12 11\r\n">>)
-  |> should.equal(NeedsMoreData)
-
-  protocol.parse(<<"MSG hello 12 11\r\nhello world\r\n">>)
-  |> should.equal(
-    Continue(protocol.Msg("hello", "12", None, <<"hello world">>), <<>>),
-  )
-
-  protocol.parse(<<"MSG hello 12 11\r\nhello world\r\n">>)
-  |> should.equal(
-    Continue(protocol.Msg("hello", "12", None, <<"hello world">>), <<>>),
-  )
-
-  protocol.parse(<<"MSG hello 12 orban 11\r\nhello world\r\n">>)
-  |> should.equal(
-    Continue(
-      protocol.Msg("hello", "12", Some("orban"), <<"hello world">>),
-      <<>>,
-    ),
-  )
+  assert string.contains(json, "\"user\":\"alice\"")
+  assert string.contains(json, "\"pass\":\"secret\"")
 }
 
-pub fn parse_double_messages() {
-  let assert Continue(protocol.Msg("foo", "1", None, <<"bar">>), rest) =
-    protocol.parse(<<"MSG foo 1 3\r\nbar\r\nMSG foo 1 3\r\nbaz\r\n">>)
-
-  let assert Continue(protocol.Msg("foo", "1", None, <<"baz">>), <<>>) =
-    protocol.parse(rest)
-}
-
-pub fn parse_message_with_headers_test() {
-  protocol.parse(<<
-    "HMSG FOO.BAR alice 34 45\r\nNATS/1.0\r\nFoodGroup: vegetable\r\n\r\nHello World\r\n",
-  >>)
-  |> should.equal(
-    Continue(
-      protocol.Hmsg(
-        topic: "FOO.BAR",
-        headers: [#("FoodGroup", "vegetable")],
-        sid: "alice",
-        reply_to: option.None,
-        payload: <<"Hello World">>,
-      ),
-      <<>>,
-    ),
-  )
-
-  protocol.parse(<<
-    "HMSG FOO.BAR 9 BAZ.69 34 45\r\nNATS/1.0\r\nFoodGroup: vegetable\r\n\r\nHello World\r\n",
-  >>)
-  |> should.equal(
-    Continue(
-      protocol.Hmsg(
-        topic: "FOO.BAR",
-        headers: [#("FoodGroup", "vegetable")],
-        sid: "9",
-        reply_to: Some("BAZ.69"),
-        payload: <<"Hello World">>,
-      ),
-      <<>>,
-    ),
-  )
-}
-
-pub fn parse_hmsg_with_status_code_test() {
-  let assert Continue(
-    Hmsg(
-      topic: "consumer6JE8",
-      headers: _,
-      sid: "1",
+pub fn hpub_test() {
+  assert protocol.encode_hpub(
+      subject: "FOO",
       reply_to: None,
-      payload: _,
-    ),
-    <<>>,
-  ) =
-    protocol.parse(<<
-      "HMSG consumer6JE8 1 33 33\r\nNATS/1.0 409 Consumer Deleted\r\n\r\n\r\n",
-    >>)
+      headers: [#("Bar", "Baz")],
+      payload: <<"Hello NATS!">>,
+    )
+    == <<"HPUB FOO 22 33\r\nNATS/1.0\r\nBar: Baz\r\n\r\nHello NATS!\r\n">>
 
-  let assert Continue(
-    Hmsg(
-      topic: "inbox",
-      headers: headers,
-      sid: "1",
-      reply_to: Some("reply"),
+  assert protocol.encode_hpub(
+      subject: "FRONT.DOOR",
+      reply_to: Some("JOKE.22"),
+      headers: [#("BREAKFAST", "donut"), #("LUNCH", "burger")],
+      payload: <<"Knock Knock">>,
+    )
+    == <<
+      "HPUB FRONT.DOOR JOKE.22 45 56\r\nNATS/1.0\r\nBREAKFAST: donut\r\nLUNCH: burger\r\n\r\nKnock Knock\r\n",
+    >>
+
+  assert protocol.encode_hpub(
+      subject: "NOTIFY",
+      reply_to: None,
+      headers: [#("Bar", "Baz")],
       payload: <<>>,
-    ),
-    <<>>,
-  ) =
-    protocol.parse(<<
-      "HMSG inbox 1 reply 28 28\r\nNATS/1.0 408 No Messages\r\n\r\n\r\n",
-    >>)
+    )
+    == <<
+      "HPUB NOTIFY 22 22\r\nNATS/1.0\r\nBar: Baz\r\n\r\n\r\n",
+    >>
 
-  should.equal(headers, [
-    #("Nats-Status", "408 No Messages"),
-  ])
+  assert protocol.encode_hpub(
+      subject: "MORNING.MENU",
+      reply_to: None,
+      headers: [#("BREAKFAST", "donut"), #("BREAKFAST", "eggs")],
+      payload: <<"Yum!">>,
+    )
+    == <<
+      "HPUB MORNING.MENU 47 51\r\nNATS/1.0\r\nBREAKFAST: donut\r\nBREAKFAST: eggs\r\n\r\nYum!\r\n",
+    >>
 }
 
-pub fn parse_hmsg_status_with_headers_test() {
-  let assert Continue(
-    Hmsg(
-      topic: "inbox",
-      headers: headers,
-      sid: "1",
-      reply_to: Some("reply"),
-      payload: <<"hello">>,
-    ),
-    <<>>,
-  ) =
-    protocol.parse(<<
-      "HMSG inbox 1 reply 43 48\r\nNATS/1.0 408 No Messages\r\nCustom: value\r\n\r\nhello\r\n",
-    >>)
+pub fn unsub_test() {
+  assert protocol.encode_unsub("1", None) == <<"UNSUB 1\r\n">>
+  assert protocol.encode_unsub("1", Some(5)) == <<"UNSUB 1 5\r\n">>
+}
 
-  should.equal(headers, [
-    #("Nats-Status", "408 No Messages"),
-    #("Custom", "value"),
-  ])
+pub fn pub_test() {
+  assert protocol.encode_pub("hello", reply_to: option.None, payload: <<"MUPP">>)
+    == <<"PUB hello 4\r\nMUPP\r\n">>
+  assert protocol.encode_pub(
+      "hello",
+      reply_to: option.Some("my_inbox"),
+      payload: <<
+        "MUPP",
+      >>,
+    )
+    == <<"PUB hello my_inbox 4\r\nMUPP\r\n">>
 }

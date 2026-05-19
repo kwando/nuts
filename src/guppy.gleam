@@ -11,9 +11,9 @@ import gleam/otp/supervision
 import gleam/result
 import gleam/string
 import gleam/uri
-import guppy/internal/command
 import guppy/internal/connect_options.{ConnectOptions}
-import guppy/internal/protocol.{type ServerInfo}
+import guppy/internal/parser.{type ServerInfo}
+import guppy/internal/protocol
 import mug
 
 @external(erlang, "guppy_ffi", "random_string")
@@ -402,7 +402,7 @@ fn handle_unsubscribe(
 ) -> actor.Next(ClientState, a) {
   case get_subscriber_by_sid(state.subscribers, subscription.subscriber.sid) {
     Ok(subscriber) -> {
-      case send_bits(state, command.encode_unsub(subscriber.sid, None)) {
+      case send_bits(state, protocol.encode_unsub(subscriber.sid, None)) {
         Ok(_) | Error(NotConnected) -> {
           actor.send(reply, Ok(Nil))
           actor.continue(
@@ -434,7 +434,7 @@ fn handle_drain_subscription(
 ) -> actor.Next(ClientState, a) {
   case get_subscriber_by_sid(state.subscribers, subscription.subscriber.sid) {
     Ok(subscriber) -> {
-      case send_bits(state, command.encode_unsub(subscriber.sid, None)) {
+      case send_bits(state, protocol.encode_unsub(subscriber.sid, None)) {
         Ok(_) -> {
           process.send_after(
             state.self,
@@ -464,7 +464,7 @@ fn handle_drain_connection(
   let unsub_all =
     state.subscribers.sids
     |> dict.keys
-    |> list.map(fn(sid) { command.encode_unsub(sid, None) })
+    |> list.map(fn(sid) { protocol.encode_unsub(sid, None) })
     |> bit_array.concat
 
   case send_bits(state, unsub_all) {
@@ -512,7 +512,7 @@ fn handle_subscriber_down(
 ) -> actor.Next(ClientState, a) {
   case get_subscriber_by_monitor(state.subscribers, down.monitor) {
     Ok(subscriber) -> {
-      let _ = send_bits(state, command.encode_unsub(subscriber.sid, None))
+      let _ = send_bits(state, protocol.encode_unsub(subscriber.sid, None))
 
       state
       |> update_subscribers(remove_subscriber(_, subscriber))
@@ -548,7 +548,7 @@ fn handle_subscribe(
         state
         |> update_subscribers(add_subscriber(_, subscriber))
 
-      case send_bits(state, command.encode_sub(subject:, sid:, queue_group:)) {
+      case send_bits(state, protocol.encode_sub(subject:, sid:, queue_group:)) {
         Ok(Nil) -> {
           actor.continue(state)
         }
@@ -649,10 +649,10 @@ fn handle_request_timeout(
 /// Convert a NatsMessage to a BitArray for sending over the socket.∏
 fn encode_message(msg: NatsMessage) -> BitArray {
   case msg.headers {
-    [] -> command.encode_pub(msg.subject, msg.reply_to, msg.payload)
+    [] -> protocol.encode_pub(msg.subject, msg.reply_to, msg.payload)
 
     headers ->
-      command.encode_hpub(msg.subject, msg.reply_to, headers, msg.payload)
+      protocol.encode_hpub(msg.subject, msg.reply_to, headers, msg.payload)
   }
 }
 
@@ -728,8 +728,8 @@ fn next_reconnect(attempt) {
 }
 
 fn parse_server_messages(state, buffer) -> Result(ClientState, NatsError) {
-  case protocol.parse(buffer) {
-    protocol.Continue(message, remaining_bytes) -> {
+  case parser.parse(buffer) {
+    parser.Continue(message, remaining_bytes) -> {
       let state = ClientState(..state, buffer: remaining_bytes)
       case handle_server_message(state, message) {
         Ok(state) ->
@@ -740,8 +740,8 @@ fn parse_server_messages(state, buffer) -> Result(ClientState, NatsError) {
         Error(err) -> Error(err)
       }
     }
-    protocol.ProtocolError(error) -> Error(ProtocolError(error))
-    protocol.NeedsMoreData -> ClientState(..state, buffer:) |> Ok
+    parser.ProtocolError(error) -> Error(ProtocolError(error))
+    parser.NeedsMoreData -> ClientState(..state, buffer:) |> Ok
   }
 }
 
@@ -764,11 +764,11 @@ fn send_bits(state: ClientState, bits: BitArray) {
 
 fn handle_server_message(
   state: ClientState,
-  message: protocol.ServerMessage,
+  message: parser.ServerMessage,
 ) -> Result(ClientState, NatsError) {
   state.logger.debug("<< " <> string.inspect(message))
   case message {
-    protocol.Info(server_info) -> {
+    parser.Info(server_info) -> {
       let auth = build_auth(state, server_info)
 
       case auth {
@@ -776,7 +776,7 @@ fn handle_server_message(
           case
             send_bits(
               state,
-              command.encode_connect(ConnectOptions(
+              protocol.encode_connect(ConnectOptions(
                 verbose: False,
                 pedantic: True,
                 tls_required: False,
@@ -791,7 +791,7 @@ fn handle_server_message(
             )
           {
             Ok(_) -> {
-              case send_bits(state, command.encode_ping()) {
+              case send_bits(state, protocol.encode_ping()) {
                 Ok(_) -> {
                   ClientState(
                     ..state,
@@ -812,18 +812,18 @@ fn handle_server_message(
         }
       }
     }
-    protocol.Ping -> {
+    parser.Ping -> {
       case
         state
         |> reset_connection_attempts
-        |> send_bits(command.encode_pong())
+        |> send_bits(protocol.encode_pong())
       {
         Ok(_) -> Ok(state)
         Error(err) -> Error(err)
       }
     }
 
-    protocol.Pong -> {
+    parser.Pong -> {
       let state =
         state
         |> cancel_pong_timeout
@@ -846,14 +846,14 @@ fn handle_server_message(
       }
     }
 
-    protocol.Msg(topic:, sid:, reply_to:, payload:) -> {
+    parser.Msg(topic:, sid:, reply_to:, payload:) -> {
       broadcast_message(
         state,
         sid,
         NatsMessage(subject: topic, reply_to:, headers: [], payload:),
       )
     }
-    protocol.Hmsg(topic:, headers:, sid:, reply_to:, payload:) -> {
+    parser.Hmsg(topic:, headers:, sid:, reply_to:, payload:) -> {
       state.logger.debug("RX HMSG topic=" <> topic <> " sid=" <> sid)
       broadcast_message(
         state,
@@ -861,8 +861,8 @@ fn handle_server_message(
         NatsMessage(subject: topic, reply_to:, headers:, payload:),
       )
     }
-    protocol.OK -> Ok(state)
-    protocol.ERR(error) -> {
+    parser.OK -> Ok(state)
+    parser.ERR(error) -> {
       fire(state.options.on_connection_event, Errored(ProtocolError(error)))
       Error(ProtocolError(error))
     }
@@ -901,7 +901,7 @@ fn increment_connection_attempts(state: ClientState) {
 fn resubscribe(state: ClientState) -> Result(ClientState, NatsError) {
   let subscribers = state.subscribers.sids |> dict.values
   let request_responder =
-    command.encode_sub(
+    protocol.encode_sub(
       subject: state.inbox_prefix <> "*",
       sid: "0",
       queue_group: None,
@@ -911,7 +911,7 @@ fn resubscribe(state: ClientState) -> Result(ClientState, NatsError) {
     list.fold(subscribers, request_responder, fn(acc, subscriber) {
       bit_array.append(
         acc,
-        command.encode_sub(
+        protocol.encode_sub(
           subject: subscriber.pattern,
           sid: subscriber.sid,
           queue_group: subscriber.queue_group,
@@ -1123,7 +1123,7 @@ fn new_inbox_from_prefix(prefix: String) -> String {
 fn handle_ping_tick(state: ClientState) -> actor.Next(ClientState, a) {
   case state.socket {
     Some(_) -> {
-      case send_bits(state, command.encode_ping()) {
+      case send_bits(state, protocol.encode_ping()) {
         Ok(_) -> {
           let timer =
             process.send_after(
