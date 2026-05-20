@@ -30,7 +30,7 @@ jobs:
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: build/docs
+          path: build/dev/docs/guppy
 
   deploy:
     runs-on: ubuntu-latest
