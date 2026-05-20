@@ -13,10 +13,11 @@ gleam add guppy@1
 
 ```gleam
 import gleam/erlang/process
+import gleam/otp/actor.{Started}
 import guppy
 
 pub fn main() {
-  let assert Ok(nats) = guppy.start(guppy.new("127.0.0.1", 4222))
+  let assert Ok(Started(_, nats)) = guppy.start(guppy.new("127.0.0.1", 4222))
 
   // Subscribe
   let assert Ok(sub) = guppy.subscribe(nats, "greetings")
@@ -61,7 +62,7 @@ let assert Ok(reply) =
 ## NKey Authentication
 
 ```gleam
-let assert Ok(nats) =
+let assert Ok(gleam.otp.actor.Started(_, nats)) =
   guppy.new("127.0.0.1", 4222)
   |> guppy.nkey_seed("SUALHP36...your_seed_here...")
   |> guppy.start()
@@ -70,53 +71,60 @@ let assert Ok(nats) =
 ## JetStream
 
 ```gleam
+import gleam/option.{None}
 import guppy/jetstream
-import guppy/jetstream_api
 
 let js = jetstream.new_context(nats)
 
 // Create a stream
-let assert Ok(stream) = jetstream.create_stream(js,
-  jetstream_api.StreamCreateRequest(
+let assert Ok(stream) = jetstream.create_stream(
+  js,
+  jetstream.StreamOptions(
     stream_name: "events",
+    description: None,
     subjects: ["events.>"],
-    retention: jetstream_api.Limits,
-    storage: jetstream_api.File,
-    max_msgs_per_subject: 100,
+    retention: jetstream.Limits,
+    discard_policy: jetstream.DiscardOld,
+    max_consumers: -1,
     max_msgs: 10000,
     max_bytes: 0,
     max_age: 0,
-    discard: jetstream_api.DiscardOld,
-    ..jetstream_api.default_stream_config()
-  )
+    storage: jetstream.Memory,
+    num_replicas: 1,
+  ),
 )
 
 // Create a consumer
-let assert Ok(consumer) = jetstream.create_consumer(js,
-  stream: "events",
-  consumer_name: "worker-1",
-  deliver_policy: jetstream_api.All,
-  ack_policy: jetstream_api.AckExplicit,
-  replay_policy: jetstream_api.Instant,
-  max_deliver: 3,
-  description: None,
+let assert Ok(consumer) = jetstream.create_consumer(
+  js,
+  "events",
+  "worker-1",
+  jetstream.ConsumerConfig(
+    ..jetstream.default_consumer_config(),
+    max_deliver: 3,
+  ),
 )
 ```
 
 ## Simple Consumer
 
 ```gleam
-import guppy/simple_consumer
-import gleam/time
+import gleam/option.{None}
+import guppy/jetstream/simple_consumer
 
 let assert Ok(_) = simple_consumer.start(
-  nats, "events", "worker-1", 1000, 500,
+  nats,
+  "events",
+  "worker-1",
+  max_messages: 1000,
+  threshold: 500,
   fn(msg, info) {
     // Process message, then return a handler reply:
     simple_consumer.ack()
-    // simple_consumer.nak()
+    // simple_consumer.retry()
     // simple_consumer.retry_later(time.minutes(5))
   },
+  None,
 )
 ```
 
@@ -125,5 +133,10 @@ Further documentation can be found at <https://hexdocs.pm/guppy/>.
 ## Development
 
 ```sh
-gleam test  # Run tests (requires a NATS server on port 6789)
+gleam test  # Run tests
 ```
+
+Integration tests require a NATS server. Either:
+
+- Start one manually: `nats-server --port 6789`
+- Use tests that call `test_utils.with_nats_server()` which spawn a temporary server on a random port
