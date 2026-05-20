@@ -20,7 +20,7 @@
 ////   let assert Ok(rev) = kv.put(ctx, "my-bucket", "my-key", <<"hello">>)
 ////
 ////   // Get a value
-////   let assert Ok(entry) = kv.get(ctx, "my-bucket", "my-key")
+////   let assert Ok(value) = kv.get(ctx, "my-bucket", "my-key")
 ////
 ////   // List all keys in a bucket
 ////   let assert Ok(keys) = kv.list_keys(ctx, "my-bucket")
@@ -377,6 +377,27 @@ pub fn put(
 /// Errors: `BadKey`, `KeyNotFound` (10037), `BucketNotFound` (10059),
 /// `ConnectionError`.
 pub fn get(
+  ctx: KvContext,
+  bucket: String,
+  key: String,
+) -> Result(BitArray, KvError) {
+  result.map(get_entry(ctx, bucket, key), fn(entry) { entry.value })
+}
+
+/// Retrieve the latest entry (value plus metadata) for a key.
+///
+/// Uses `$JS.API.STREAM.MSG.GET` with `last_by_subj` to fetch the most recent
+/// message for the key subject. Returns `KeyNotFound` if the latest message
+/// is a delete or purge marker.
+///
+/// Parameters:
+/// - `ctx`: The KV context.
+/// - `bucket`: The bucket name.
+/// - `key`: The key.
+///
+/// Errors: `BadKey`, `KeyNotFound` (10037), `BucketNotFound` (10059),
+/// `ConnectionError`.
+pub fn get_entry(
   ctx: KvContext,
   bucket: String,
   key: String,

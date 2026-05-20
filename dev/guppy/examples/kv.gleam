@@ -10,7 +10,7 @@ pub fn main() {
   process.sleep(1000)
   let kv = kv.new_context(conn)
 
-  case kv.get(kv, "merciless", "foo") {
+  case kv.get_entry(kv, "merciless", "foo") {
     Ok(entry) -> {
       echo entry
       Nil
