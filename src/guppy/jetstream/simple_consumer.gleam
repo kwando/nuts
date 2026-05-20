@@ -1,8 +1,8 @@
-/// A pull-based JetStream consumer actor that manages message polling
-/// and acknowledgment for a NATS JetStream consumer.
-///
-/// The consumer automatically polls for messages, maintains an in-flight
-/// message window, and triggers new polls when the pending count drops
+//// A pull-based JetStream consumer actor that manages message polling
+//// and acknowledgment for a NATS JetStream consumer.
+////
+//// The consumer automatically polls for messages, maintains an in-flight
+//// message window, and triggers new polls when the pending count drops
 /// below a configurable threshold.
 import gleam/bit_array
 import gleam/bool

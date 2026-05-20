@@ -1,31 +1,31 @@
-/// NATS Key-Value Store client for the Guppy library.
-///
-/// This module provides a high-level API for interacting with NATS KV buckets,
-/// including bucket management and key-value operations.
-///
-/// ## Quick start
-///
-/// ```gleam
-/// import guppy
-/// import guppy/kv
-///
-/// pub fn main() {
-///   let assert Ok(conn) = guppy.start(guppy.new("127.0.0.1", 4222))
-///   let ctx = kv.new_context(conn)
-///
-///   // Create a bucket
-///   let assert Ok(_) = kv.create_bucket(ctx, kv.default_bucket_config("my-bucket"))
-///
-///   // Put a value
-///   let assert Ok(rev) = kv.put(ctx, "my-bucket", "my-key", <<"hello">>)
-///
-///   // Get a value
-///   let assert Ok(entry) = kv.get(ctx, "my-bucket", "my-key")
-///
-///   // List all keys in a bucket
-///   let assert Ok(keys) = kv.list_keys(ctx, "my-bucket")
-/// }
-/// ```
+//// NATS Key-Value Store client for the Guppy library.
+////
+//// This module provides a high-level API for interacting with NATS KV buckets,
+//// including bucket management and key-value operations.
+////
+//// ## Quick start
+////
+//// ```gleam
+//// import guppy
+//// import guppy/kv
+////
+//// pub fn main() {
+////   let assert Ok(gleam.otp.actor.Started(_, conn)) = guppy.start(guppy.new("127.0.0.1", 4222))
+////   let ctx = kv.new_context(conn)
+////
+////   // Create a bucket
+////   let assert Ok(_) = kv.create_bucket(ctx, kv.default_bucket_config("my-bucket"))
+////
+////   // Put a value
+////   let assert Ok(rev) = kv.put(ctx, "my-bucket", "my-key", <<"hello">>)
+////
+////   // Get a value
+////   let assert Ok(entry) = kv.get(ctx, "my-bucket", "my-key")
+////
+////   // List all keys in a bucket
+////   let assert Ok(keys) = kv.list_keys(ctx, "my-bucket")
+//// }
+//// ```
 import gleam/bit_array
 import gleam/dict
 import gleam/dynamic/decode.{type Decoder}
@@ -41,6 +41,9 @@ import guppy.{type NatsMessage, NatsMessage}
 
 // ── Context ─────────────────────────────────────────────────────────────────
 
+/// Opaque context holding a NATS connection and configuration for KV operations.
+///
+/// Created with `new_context` and optionally extended with `with_logger`.
 pub opaque type KvContext {
   KvContext(
     conn: Subject(guppy.Message),
@@ -74,6 +77,7 @@ pub fn with_logger(ctx: KvContext, log: fn(String) -> Nil) -> KvContext {
 
 // ── Errors ──────────────────────────────────────────────────────────────────
 
+/// Errors that can occur during KV operations.
 pub type KvError {
   ConnectionError(guppy.NatsError)
   ResponseDecodeError(json.DecodeError, BitArray)
@@ -85,22 +89,33 @@ pub type KvError {
   BadKey(String)
 }
 
+/// A JetStream API error with code, description, and NATS error code.
 pub type KvApiError {
   KvApiError(code: Int, description: String, err_code: Int)
 }
 
 // ── Bucket Types ────────────────────────────────────────────────────────────
 
+/// Storage backend for a KV bucket.
 pub type Storage {
+  /// Messages are persisted to disk.
   File
+  /// Messages are stored in memory only.
   Memory
 }
 
+/// Compression algorithm for a KV bucket.
 pub type Compression {
+  /// No compression applied.
   NoCompression
+  /// S2 compression (Snappy-based).
   S2
 }
 
+/// Configuration for a KV bucket, mapped to a backing JetStream stream.
+///
+/// Use `default_bucket_config` for sensible defaults, then override fields
+/// as needed with record update syntax.
 pub type BucketConfig {
   BucketConfig(
     bucket_name: String,
@@ -138,6 +153,7 @@ pub fn default_bucket_config(bucket_name: String) -> BucketConfig {
   )
 }
 
+/// Runtime status of a KV bucket, including message counts and sequence numbers.
 pub type BucketStatus {
   BucketStatus(
     bucket: String,
@@ -151,12 +167,17 @@ pub type BucketStatus {
 
 // ── Entry Types ──────────────────────────────────────────────────────────────
 
+/// The operation that produced a KV entry.
 pub type Operation {
+  /// A normal put operation.
   Put
+  /// A delete marker was written.
   Delete
+  /// A purge marker was written (all revisions removed).
   Purge
 }
 
+/// A single entry in a KV bucket, representing one revision of a key.
 pub type KeyValueEntry {
   KeyValueEntry(
     bucket: String,
