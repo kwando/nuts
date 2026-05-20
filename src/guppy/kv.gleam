@@ -90,7 +90,7 @@ pub type KvError {
   BadKey(String)
 }
 
-/// A JetStream API error with code, description, and NATS error code.
+@internal
 pub type KvApiError {
   KvApiError(code: Int, description: String, err_code: Int)
 }
