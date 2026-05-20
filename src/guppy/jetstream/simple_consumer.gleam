@@ -3,7 +3,8 @@
 ////
 //// The consumer automatically polls for messages, maintains an in-flight
 //// message window, and triggers new polls when the pending count drops
-/// below a configurable threshold.
+//// below a configurable threshold.
+
 import gleam/bit_array
 import gleam/bool
 import gleam/erlang/process.{type Subject}
