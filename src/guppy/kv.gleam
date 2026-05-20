@@ -312,7 +312,7 @@ pub fn list_bucket_names(ctx: KvContext) -> Result(List(String), KvError) {
 /// `state.subjects`. Returns the keys with the `$KV.<bucket>.` prefix stripped.
 ///
 /// Note: this returns all subjects known to the stream, including keys that
-/// have been deleted (delete markers remain as stream messages). Use `get` to
+/// have been deleted (delete markers remain as stream messages). Use `get_entry` to
 /// verify a key still exists.
 ///
 /// Parameters:
