@@ -552,10 +552,7 @@ pub fn delete_key(
         headers: [#("KV-Operation", "DEL")],
         payload: <<>>,
       )
-    case guppy.request(ctx.conn, msg, ctx.request_timeout) {
-      Ok(_) -> Ok(Nil)
-      Error(err) -> Error(ConnectionError(err))
-    }
+    send(ctx, msg)
   })
 }
 
@@ -580,23 +577,19 @@ pub fn purge_key(
   |> result.map_error(BadKey)
   |> result.try(fn(_) {
     let subject = key_to_subject(bucket, key)
-    let msg =
+    let marker =
       NatsMessage(
         subject:,
         reply_to: None,
         headers: [#("KV-Operation", "PURGE")],
         payload: <<>>,
       )
-    case guppy.request(ctx.conn, msg, ctx.request_timeout) {
-      Ok(_) -> {
-        let purge_request = stream_purge_request(bucket, subject)
-        use response <- make_request(ctx, purge_request)
-        case decode_response(ctx, response, purge_response_decoder()) {
-          Ok(_) -> Ok(Nil)
-          Error(err) -> Error(err)
-        }
-      }
-      Error(err) -> Error(ConnectionError(err))
+    use _ <- result.try(send(ctx, marker))
+    let purge_request = stream_purge_request(bucket, subject)
+    use response <- make_request(ctx, purge_request)
+    case decode_response(ctx, response, purge_response_decoder()) {
+      Ok(_) -> Ok(Nil)
+      Error(err) -> Error(err)
     }
   })
 }
@@ -986,6 +979,13 @@ fn make_request(
 ) -> Result(a, KvError) {
   case guppy.request(ctx.conn, msg, ctx.request_timeout) {
     Ok(response) -> next(response)
+    Error(err) -> Error(ConnectionError(err))
+  }
+}
+
+fn send(ctx: KvContext, msg: NatsMessage) -> Result(Nil, KvError) {
+  case guppy.request(ctx.conn, msg, ctx.request_timeout) {
+    Ok(_) -> Ok(Nil)
     Error(err) -> Error(ConnectionError(err))
   }
 }
