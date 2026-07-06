@@ -8,19 +8,23 @@ pub fn main() {
     guppy.start(guppy.new("10.0.0.7", 4222))
 
   process.sleep(1000)
-  let kv = kv.new_context(conn)
+  let ctx = kv.new_context(conn)
 
-  case kv.get_entry(kv, "merciless", "foo") {
-    Ok(entry) -> {
-      echo entry
-      Nil
-    }
-    Error(error) -> {
-      echo error
-      Nil
-    }
-  }
+  // delete bucket if it already exists
+  let _ = kv.delete_bucket(ctx, "guppy-example")
+  let assert Ok(_) =
+    kv.create_bucket(ctx, kv.default_bucket_config("guppy-example"))
+  let bucket = kv.get_bucket(ctx, "guppy-example")
 
-  kv.list_keys(kv, "merciless")
-  |> echo
+  // expect KeyNotFound if there is no data
+  let assert Error(kv.KeyNotFound) = kv.get(bucket, "foo")
+
+  // set the key "foo" to "bar"
+  let _ = kv.put(bucket, "foo", <<"bar">>)
+
+  // key should now have been set
+  let assert Ok(<<"bar">>) = kv.get(bucket, "foo")
+
+  // the foo key wil be returned here
+  let assert Ok(["foo"]) = kv.list_keys(bucket)
 }

@@ -16,14 +16,17 @@
 ////   // Create a bucket
 ////   let assert Ok(_) = kv.create_bucket(ctx, kv.default_bucket_config("my-bucket"))
 ////
+////   // Get a bucket handle for key-value operations
+////   let bucket = kv.get_bucket(ctx, "my-bucket")
+////
 ////   // Put a value
-////   let assert Ok(rev) = kv.put(ctx, "my-bucket", "my-key", <<"hello">>)
+////   let assert Ok(rev) = kv.put(bucket, "my-key", <<"hello">>)
 ////
 ////   // Get a value
-////   let assert Ok(value) = kv.get(ctx, "my-bucket", "my-key")
+////   let assert Ok(value) = kv.get(bucket, "my-key")
 ////
 ////   // List all keys in a bucket
-////   let assert Ok(keys) = kv.list_keys(ctx, "my-bucket")
+////   let assert Ok(keys) = kv.list_keys(bucket)
 //// }
 //// ```
 
@@ -309,28 +312,39 @@ pub fn list_bucket_names(ctx: KvContext) -> Result(List(String), KvError) {
 /// List all active keys in a KV bucket.
 ///
 /// Fetches the stream info and extracts all unique subject names from
-/// `state.subjects`. Returns the keys with the `$KV.<bucket>.` prefix stripped.
+/// `state.subjects`, then filters out keys that have been deleted or purged.
+/// Returns only keys whose latest operation is `Put`.
 ///
-/// Note: this returns all subjects known to the stream, including keys that
-/// have been deleted (delete markers remain as stream messages). Use `get_entry` to
-/// verify a key still exists.
+/// Note: this makes N+1 requests (one for stream info + one per key) to verify
+/// each key still exists. For large buckets, consider using a watcher-based
+/// approach.
 ///
 /// Parameters:
-/// - `ctx`: The KV context.
-/// - `bucket`: The bucket name.
+/// - `bucket`: The bucket.
 ///
 /// Errors: `BucketNotFound` (10059), `ConnectionError`.
-pub fn list_keys(
-  ctx: KvContext,
-  bucket: String,
-) -> Result(List(String), KvError) {
-  use msg <- make_request(ctx, bucket_info_with_subjects_request(bucket))
+pub fn list_keys(bucket: Bucket) -> Result(List(String), KvError) {
+  use msg <- make_request(
+    bucket.context,
+    bucket_info_with_subjects_request(bucket.name),
+  )
   use decoded <- result.try(decode_response(
-    ctx,
+    bucket.context,
     msg,
-    bucket_keys_decoder(bucket),
+    bucket_keys_decoder(bucket.name),
   ))
-  result.map_error(decoded, map_api_error)
+  case decoded {
+    Ok(keys) ->
+      Ok(
+        list.filter(keys, fn(key) {
+          case get_entry(bucket, key) {
+            Ok(_) -> True
+            Error(_) -> False
+          }
+        }),
+      )
+    Error(err) -> Error(map_api_error(err))
+  }
 }
 
 // ── Entry API ────────────────────────────────────────────────────────────────
@@ -341,24 +355,22 @@ pub fn list_keys(
 /// assigned by JetStream for this write.
 ///
 /// Parameters:
-/// - `ctx`: The KV context.
-/// - `bucket`: The bucket name.
+/// - `bucket`: The bucket.
 /// - `key`: The key (validated against NATS KV naming rules).
 /// - `value`: The value as a `BitArray` (any binary data).
 ///
 /// Errors: `BadKey`, `ConnectionError`.
 pub fn put(
-  ctx: KvContext,
-  bucket: String,
+  bucket: Bucket,
   key: String,
   value: BitArray,
 ) -> Result(Int, KvError) {
   validate_key(key)
   |> result.map_error(BadKey)
   |> result.try(fn(_) {
-    let subject = key_to_subject(bucket, key)
+    let subject = key_to_subject(bucket.name, key)
     let msg = NatsMessage(subject:, reply_to: None, headers: [], payload: value)
-    use response <- make_request(ctx, msg)
+    use response <- make_request(bucket.context, msg)
     decode_revision_response(response.payload)
   })
 }
@@ -370,18 +382,13 @@ pub fn put(
 /// is a delete or purge marker.
 ///
 /// Parameters:
-/// - `ctx`: The KV context.
-/// - `bucket`: The bucket name.
+/// - `bucket`: The bucket.
 /// - `key`: The key.
 ///
 /// Errors: `BadKey`, `KeyNotFound` (10037), `BucketNotFound` (10059),
 /// `ConnectionError`.
-pub fn get(
-  ctx: KvContext,
-  bucket: String,
-  key: String,
-) -> Result(BitArray, KvError) {
-  result.map(get_entry(ctx, bucket, key), fn(entry) { entry.value })
+pub fn get(bucket: Bucket, key: String) -> Result(BitArray, KvError) {
+  result.map(get_entry(bucket, key), fn(entry) { entry.value })
 }
 
 /// Retrieve the latest entry (value plus metadata) for a key.
@@ -398,18 +405,22 @@ pub fn get(
 /// Errors: `BadKey`, `KeyNotFound` (10037), `BucketNotFound` (10059),
 /// `ConnectionError`.
 pub fn get_entry(
-  ctx: KvContext,
-  bucket: String,
+  bucket: Bucket,
   key: String,
 ) -> Result(KeyValueEntry, KvError) {
   validate_key(key)
   |> result.map_error(BadKey)
   |> result.try(fn(_) {
-    let stream_name = bucket_to_stream_name(bucket)
-    let subj = key_to_subject(bucket, key)
+    let stream_name = bucket_to_stream_name(bucket.name)
+    let subj = key_to_subject(bucket.name, key)
     let request = msg_get_by_subject_request(stream_name, subj)
-    use msg <- make_request(ctx, request)
-    use entry <- result.try(decode_entry_response(ctx, msg, bucket, key))
+    use msg <- make_request(bucket.context, request)
+    use entry <- result.try(decode_entry_response(
+      bucket.context,
+      msg,
+      bucket.name,
+      key,
+    ))
     case entry.operation {
       Delete | Purge -> Error(KeyNotFound)
       Put -> Ok(entry)
@@ -424,26 +435,29 @@ pub fn get_entry(
 /// discarded.
 ///
 /// Parameters:
-/// - `ctx`: The KV context.
-/// - `bucket`: The bucket name.
+/// - `bucket`: The bucket.
 /// - `key`: The key.
 /// - `revision`: The revision (JetStream sequence number) to fetch.
 ///
 /// Errors: `BadKey`, `KeyNotFound` (10037), `BadRevision` (10071/10072),
 /// `BucketNotFound` (10059), `ConnectionError`.
 pub fn get_revision(
-  ctx: KvContext,
-  bucket: String,
+  bucket: Bucket,
   key: String,
   revision: Int,
 ) -> Result(KeyValueEntry, KvError) {
   validate_key(key)
   |> result.map_error(BadKey)
   |> result.try(fn(_) {
-    let stream_name = bucket_to_stream_name(bucket)
+    let stream_name = bucket_to_stream_name(bucket.name)
     let request = msg_get_by_seq_request(stream_name, revision)
-    use msg <- make_request(ctx, request)
-    use entry <- result.try(decode_entry_response(ctx, msg, bucket, key))
+    use msg <- make_request(bucket.context, request)
+    use entry <- result.try(decode_entry_response(
+      bucket.context,
+      msg,
+      bucket.name,
+      key,
+    ))
     case entry.operation {
       Delete | Purge -> Error(KeyNotFound)
       Put -> Ok(entry)
@@ -458,22 +472,20 @@ pub fn get_revision(
 /// revision of the newly created entry.
 ///
 /// Parameters:
-/// - `ctx`: The KV context.
-/// - `bucket`: The bucket name.
+/// - `bucket`: The bucket.
 /// - `key`: The key.
 /// - `value`: The initial value.
 ///
 /// Errors: `BadKey`, `BadRevision` (key already exists), `ConnectionError`.
 pub fn create(
-  ctx: KvContext,
-  bucket: String,
+  bucket: Bucket,
   key: String,
   value: BitArray,
 ) -> Result(Int, KvError) {
   validate_key(key)
   |> result.map_error(BadKey)
   |> result.try(fn(_) {
-    let subject = key_to_subject(bucket, key)
+    let subject = key_to_subject(bucket.name, key)
     let msg =
       NatsMessage(
         subject:,
@@ -481,7 +493,7 @@ pub fn create(
         headers: [#("Nats-Expected-Last-Subject-Sequence", "0")],
         payload: value,
       )
-    use response <- make_request(ctx, msg)
+    use response <- make_request(bucket.context, msg)
     decode_revision_response(response.payload)
   })
 }
@@ -492,8 +504,7 @@ pub fn create(
 /// revision, performing a CAS (compare-and-swap). Returns the new revision.
 ///
 /// Parameters:
-/// - `ctx`: The KV context.
-/// - `bucket`: The bucket name.
+/// - `bucket`: The bucket.
 /// - `key`: The key.
 /// - `value`: The new value.
 /// - `revision`: The expected current revision; the update fails if the
@@ -501,8 +512,7 @@ pub fn create(
 ///
 /// Errors: `BadKey`, `BadRevision` (10071/10072), `ConnectionError`.
 pub fn update(
-  ctx: KvContext,
-  bucket: String,
+  bucket: Bucket,
   key: String,
   value: BitArray,
   revision: Int,
@@ -510,7 +520,7 @@ pub fn update(
   validate_key(key)
   |> result.map_error(BadKey)
   |> result.try(fn(_) {
-    let subject = key_to_subject(bucket, key)
+    let subject = key_to_subject(bucket.name, key)
     let msg =
       NatsMessage(
         subject:,
@@ -520,7 +530,7 @@ pub fn update(
         ],
         payload: value,
       )
-    use response <- make_request(ctx, msg)
+    use response <- make_request(bucket.context, msg)
     decode_revision_response(response.payload)
   })
 }
@@ -531,20 +541,15 @@ pub fn update(
 /// subject. Subsequent `get` calls will return `KeyNotFound`.
 ///
 /// Parameters:
-/// - `ctx`: The KV context.
-/// - `bucket`: The bucket name.
+/// - `bucket`: The bucket.
 /// - `key`: The key to delete.
 ///
 /// Errors: `BadKey`, `ConnectionError`.
-pub fn delete_key(
-  ctx: KvContext,
-  bucket: String,
-  key: String,
-) -> Result(Nil, KvError) {
+pub fn delete_key(bucket: Bucket, key: String) -> Result(Nil, KvError) {
   validate_key(key)
   |> result.map_error(BadKey)
   |> result.try(fn(_) {
-    let subject = key_to_subject(bucket, key)
+    let subject = key_to_subject(bucket.name, key)
     let msg =
       NatsMessage(
         subject:,
@@ -552,7 +557,7 @@ pub fn delete_key(
         headers: [#("KV-Operation", "DEL")],
         payload: <<>>,
       )
-    send(ctx, msg)
+    send(bucket.context, msg)
   })
 }
 
@@ -563,20 +568,15 @@ pub fn delete_key(
 /// historical revisions, not just the latest.
 ///
 /// Parameters:
-/// - `ctx`: The KV context.
-/// - `bucket`: The bucket name.
+/// - `bucket`: The bucket.
 /// - `key`: The key to purge.
 ///
 /// Errors: `BadKey`, `ConnectionError`.
-pub fn purge_key(
-  ctx: KvContext,
-  bucket: String,
-  key: String,
-) -> Result(Nil, KvError) {
+pub fn purge_key(bucket: Bucket, key: String) -> Result(Nil, KvError) {
   validate_key(key)
   |> result.map_error(BadKey)
   |> result.try(fn(_) {
-    let subject = key_to_subject(bucket, key)
+    let subject = key_to_subject(bucket.name, key)
     let marker =
       NatsMessage(
         subject:,
@@ -584,10 +584,10 @@ pub fn purge_key(
         headers: [#("KV-Operation", "PURGE")],
         payload: <<>>,
       )
-    use _ <- result.try(send(ctx, marker))
-    let purge_request = stream_purge_request(bucket, subject)
-    use response <- make_request(ctx, purge_request)
-    case decode_response(ctx, response, purge_response_decoder()) {
+    use _ <- result.try(send(bucket.context, marker))
+    let purge_request = stream_purge_request(bucket.name, subject)
+    use response <- make_request(bucket.context, purge_request)
+    case decode_response(bucket.context, response, purge_response_decoder()) {
       Ok(_) -> Ok(Nil)
       Error(err) -> Error(err)
     }
@@ -1085,4 +1085,21 @@ fn optional_field(
 fn json_payload(json: json.Json) -> BitArray {
   json.to_string(json)
   |> bit_array.from_string
+}
+
+/// A handle to a specific KV bucket, holding the context and bucket name.
+///
+/// Created with `get_bucket` and passed to all key-value operation functions
+/// (`put`, `get`, `list_keys`, etc.).
+pub opaque type Bucket {
+  Bucket(context: KvContext, name: String)
+}
+
+/// Create a bucket handle for key-value operations.
+///
+/// Parameters:
+/// - `context`: The KV context holding the NATS connection.
+/// - `name`: The name of the bucket.
+pub fn get_bucket(context: KvContext, name: String) -> Bucket {
+  Bucket(context:, name:)
 }

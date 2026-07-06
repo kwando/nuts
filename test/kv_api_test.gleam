@@ -326,28 +326,28 @@ pub fn list_keys_test() {
   let config =
     kv.BucketConfig(..kv.default_bucket_config("list_keys_bucket"), history: 5)
   let assert Ok(_) = kv.create_bucket(ctx, config)
+  let bucket = kv.get_bucket(ctx, "list_keys_bucket")
 
   // No keys yet
-  let assert Ok(keys) = kv.list_keys(ctx, "list_keys_bucket")
+  let assert Ok(keys) = kv.list_keys(bucket)
   assert keys == []
 
   // Put a few keys
-  let assert Ok(_) = kv.put(ctx, "list_keys_bucket", "alpha", <<"1">>)
-  let assert Ok(_) = kv.put(ctx, "list_keys_bucket", "beta", <<"2">>)
-  let assert Ok(_) = kv.put(ctx, "list_keys_bucket", "gamma", <<"3">>)
+  let assert Ok(_) = kv.put(bucket, "alpha", <<"1">>)
+  let assert Ok(_) = kv.put(bucket, "beta", <<"2">>)
+  let assert Ok(_) = kv.put(bucket, "gamma", <<"3">>)
 
-  let assert Ok(keys) = kv.list_keys(ctx, "list_keys_bucket")
+  let assert Ok(keys) = kv.list_keys(bucket)
   assert list.contains(keys, "alpha")
   assert list.contains(keys, "beta")
   assert list.contains(keys, "gamma")
 
-  // Delete a key — the subject still appears in stream subjects (the
-  // delete marker is a message), so list_keys still includes it.
-  let assert Ok(_) = kv.delete_key(ctx, "list_keys_bucket", "beta")
+  // Delete a key — list_keys should no longer include it
+  let assert Ok(_) = kv.delete_key(bucket, "beta")
 
-  let assert Ok(keys) = kv.list_keys(ctx, "list_keys_bucket")
+  let assert Ok(keys) = kv.list_keys(bucket)
   assert list.contains(keys, "alpha")
-  assert list.contains(keys, "beta")
+  assert !list.contains(keys, "beta")
   assert list.contains(keys, "gamma")
 
   let assert Ok(_) = kv.delete_bucket(ctx, "list_keys_bucket")
