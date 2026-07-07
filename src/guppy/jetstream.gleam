@@ -612,6 +612,7 @@ pub type DeliverPolicy {
   DeliverByStartSequence(Int)
   /// Deliver starting from the given timestamp.
   DeliverByStartTime(Timestamp)
+  DeliverLastPerSubject(List(String))
 }
 
 /// How messages must be acknowledged by the consumer.
@@ -1057,9 +1058,19 @@ fn replay_policy_to_json(replay_policy: ReplayPolicy) -> json.Json {
 
 fn deliver_policy_to_json(policy: DeliverPolicy) -> List(#(String, json.Json)) {
   case policy {
-    DeliverAll -> [#("deliver_policy", json.string("all"))]
-    DeliverNew -> [#("deliver_policy", json.string("new"))]
-    DeliverLast -> [#("deliver_policy", json.string("last"))]
+    DeliverAll -> [
+      #("deliver_policy", json.string("all")),
+    ]
+    DeliverNew -> [
+      #("deliver_policy", json.string("new")),
+    ]
+    DeliverLast -> [
+      #("deliver_policy", json.string("last")),
+    ]
+    DeliverLastPerSubject(subjects) -> [
+      #("deliver_policy", json.string("last_per_subject")),
+      #("filter_subjects", json.array(subjects, json.string)),
+    ]
     DeliverByStartSequence(seq) -> [
       #("deliver_policy", json.string("by_start_sequence")),
       #("opt_start_seq", json.int(seq)),
