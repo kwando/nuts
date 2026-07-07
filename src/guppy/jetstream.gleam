@@ -683,6 +683,7 @@ pub type ConsumerCreateResponse {
     name: String,
     created: Timestamp,
     timestamp: Timestamp,
+    num_pending: Int,
   )
 }
 
@@ -849,8 +850,15 @@ pub fn consumer_create_response_decoder() -> Decoder(
   use name <- decode.field("name", decode.string)
   use created <- decode.field("created", decode_timestamp())
   use timestamp <- decode.field("ts", decode_timestamp())
+  use num_pending <- decode.field("num_pending", decode.int)
   decode.success(
-    Ok(ConsumerCreateResponse(stream_name:, name:, created:, timestamp:)),
+    Ok(ConsumerCreateResponse(
+      stream_name:,
+      name:,
+      created:,
+      timestamp:,
+      num_pending:,
+    )),
   )
 }
 
