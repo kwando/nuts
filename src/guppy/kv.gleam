@@ -42,6 +42,8 @@ import gleam/result
 import gleam/string
 import gleam/time/timestamp.{type Timestamp}
 import guppy.{type NatsMessage, NatsMessage}
+import guppy/internal/basic_consumer
+import guppy/jetstream
 
 // ── Context ─────────────────────────────────────────────────────────────────
 
@@ -1102,4 +1104,59 @@ pub opaque type Bucket {
 /// - `name`: The name of the bucket.
 pub fn get_bucket(context: KvContext, name: String) -> Bucket {
   Bucket(context:, name:)
+}
+
+pub fn list_with_watcher(bucket: Bucket) {
+  let stream_name = "KV_" <> bucket.name
+  let consumer_name = "kv-watcher-" <> int.random(1_000_000) |> int.to_string
+
+  let assert Ok(consumer_info) =
+    jetstream.create_consumer(
+      jetstream.new_context(bucket.context.conn),
+      stream: stream_name,
+      consumer_name:,
+      config: jetstream.ConsumerConfig(
+        ..jetstream.default_consumer_config(),
+        headers_only: True,
+        deliver_policy: jetstream.DeliverLastPerSubject([
+          "$KV." <> bucket.name <> ".>",
+        ]),
+        durable: False,
+      ),
+    )
+
+  let reply = process.new_subject()
+  let assert Ok(_) =
+    basic_consumer.start(
+      bucket.context.conn,
+      stream_name: stream_name,
+      consumer_name:,
+      max_messages: 1000,
+      threshold: 500,
+      initial: #(consumer_info.num_pending, []),
+      handler: fn(acc, msg, _info) {
+        let acc = #(acc.0 - 1, case is_delete_marker(msg) {
+          True -> acc.1
+          False -> [parse_key_from_subject(bucket.name, msg.subject), ..acc.1]
+        })
+        case acc.0 {
+          0 -> {
+            process.send(reply, acc.1)
+            basic_consumer.stop(jetstream.Ack)
+          }
+          _ -> basic_consumer.continue(jetstream.Ack, acc)
+        }
+      },
+      logger: option.None,
+    )
+
+  process.receive(reply, 5000)
+}
+
+fn parse_key_from_subject(bucket_name: String, input: String) {
+  string.replace(input, "$KV." <> bucket_name <> ".", "")
+}
+
+fn is_delete_marker(msg: guppy.NatsMessage) {
+  msg.headers |> list.key_find("KV-Operation") == Ok("DEL")
 }
