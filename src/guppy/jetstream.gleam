@@ -58,6 +58,7 @@ import gleam/time/calendar
 import gleam/time/duration.{type Duration}
 import gleam/time/timestamp.{type Timestamp}
 import guppy.{type NatsMessage, NatsMessage}
+import guppy/internal/parser
 
 // ── Context ─────────────────────────────────────────────────────────────────
 
@@ -92,6 +93,7 @@ pub type JetstreamError {
   WrongLastSequence
   WrongLastSubjectSequence
   MessageTooLarge
+  MessageNotFound
 }
 
 pub type StreamApiError {
@@ -225,6 +227,16 @@ pub type StreamDeleteResponse {
   StreamDeleteResponse(success: Bool)
 }
 
+pub type StreamMessage {
+  StreamMessage(
+    sequence: Int,
+    subject: String,
+    payload: BitArray,
+    timestamp: Timestamp,
+    headers: List(#(String, String)),
+  )
+}
+
 // ── Stream API ───────────────────────────────────────────────────────────────
 
 pub fn list_stream_names(
@@ -332,6 +344,39 @@ pub fn delete_message(
     js,
     msg,
     delete_message_response_decoder(),
+  ))
+  decoded_result
+  |> result.map_error(map_api_error)
+}
+
+pub fn get_message_by_seq(
+  js: JetstreamContext,
+  stream: String,
+  seq: Int,
+) -> Result(StreamMessage, JetstreamError) {
+  use msg <- make_request(js, get_message_by_seq_request(stream, seq))
+  use decoded_result <- result.try(decode_response(
+    js,
+    msg,
+    get_message_response_decoder(),
+  ))
+  decoded_result
+  |> result.map_error(map_api_error)
+}
+
+pub fn get_last_message_by_subject(
+  js: JetstreamContext,
+  stream: String,
+  subject: String,
+) -> Result(StreamMessage, JetstreamError) {
+  use msg <- make_request(
+    js,
+    get_last_message_by_subject_request(stream, subject),
+  )
+  use decoded_result <- result.try(decode_response(
+    js,
+    msg,
+    get_message_response_decoder(),
   ))
   decoded_result
   |> result.map_error(map_api_error)
@@ -506,6 +551,83 @@ fn delete_message_response_decoder() -> Decoder(
   use <- decode_stream_api_error()
   use success <- decode.field("success", decode.bool)
   decode.success(Ok(DeleteMessageResponse(success:)))
+}
+
+@internal
+pub fn get_message_by_seq_request(
+  stream_name: String,
+  seq: Int,
+) -> NatsMessage {
+  NatsMessage(
+    subject: "$JS.API.STREAM.MSG.GET." <> stream_name,
+    reply_to: None,
+    headers: [],
+    payload: json_payload(json.object([#("seq", json.int(seq))])),
+  )
+}
+
+@internal
+pub fn get_last_message_by_subject_request(
+  stream_name: String,
+  subject: String,
+) -> NatsMessage {
+  NatsMessage(
+    subject: "$JS.API.STREAM.MSG.GET." <> stream_name,
+    reply_to: None,
+    headers: [],
+    payload: json_payload(
+      json.object([#("last_by_subj", json.string(subject))]),
+    ),
+  )
+}
+
+fn get_message_response_decoder() -> Decoder(
+  Result(StreamMessage, StreamApiError),
+) {
+  use <- decode_stream_api_error()
+  decode.field("message", stream_message_decoder(), fn(result) {
+    decode.success(result)
+  })
+}
+
+fn stream_message_decoder() -> Decoder(Result(StreamMessage, StreamApiError)) {
+  use <- decode_stream_api_error()
+  use seq <- decode.field("seq", decode.int)
+  use subject <- decode.field("subject", decode.string)
+  use data <- decode.optional_field("data", <<>>, base64_data_decoder())
+  use time <- decode.field("time", decode_timestamp())
+  use headers <- decode.optional_field("hdrs", [], base64_headers_decoder())
+  decode.success(
+    Ok(StreamMessage(
+      sequence: seq,
+      subject:,
+      payload: data,
+      timestamp: time,
+      headers:,
+    )),
+  )
+}
+
+fn base64_data_decoder() -> Decoder(BitArray) {
+  decode.then(decode.string, fn(encoded) {
+    case bit_array.base64_decode(encoded) {
+      Ok(data) -> decode.success(data)
+      Error(Nil) -> decode.failure(<<>>, "base64 data")
+    }
+  })
+}
+
+fn base64_headers_decoder() -> Decoder(List(#(String, String))) {
+  decode.then(decode.string, fn(encoded) {
+    case bit_array.base64_decode(encoded) {
+      Ok(headers_bits) ->
+        case parser.parse_headers(headers_bits) {
+          Ok(headers) -> decode.success(headers)
+          Error(Nil) -> decode.success([])
+        }
+      Error(Nil) -> decode.success([])
+    }
+  })
 }
 
 @internal
@@ -1318,6 +1440,7 @@ fn map_api_error(err: StreamApiError) {
     10_071 -> WrongLastSequence
     10_072 -> WrongLastSubjectSequence
     10_074 -> MessageTooLarge
+    10_037 -> MessageNotFound
     _ ->
       ApiError(
         code: err.code,

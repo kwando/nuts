@@ -437,3 +437,93 @@ pub fn push_consumer_test() {
     jetstream.delete_consumer(js, stream: stream_name, consumer_name:)
   let assert Ok(_) = jetstream.delete_stream(js, stream_name)
 }
+
+pub fn get_message_test() {
+  use conn <- test_utils.with_client()
+  let js = jetstream.new_context(conn)
+
+  let stream_name = "get_msg_test_stream"
+  let _ = jetstream.delete_stream(js, stream_name)
+
+  let assert Ok(_) =
+    jetstream.create_stream(
+      js,
+      jetstream.StreamOptions(
+        stream_name:,
+        description: None,
+        subjects: ["get.msg.>"],
+        retention: jetstream.Limits,
+        max_consumers: -1,
+        max_msgs: -1,
+        max_bytes: -1,
+        max_age: 0,
+        storage: jetstream.Memory,
+        num_replicas: 1,
+        discard_policy: jetstream.DiscardOld,
+      ),
+    )
+
+  // Publish messages to different subjects
+  let assert Ok(ack1) =
+    jetstream.publish(
+      js,
+      "get.msg.foo",
+      <<"hello foo">>,
+      jetstream.default_publish_options(),
+    )
+  assert ack1.seq == 1
+
+  let assert Ok(ack2) =
+    jetstream.publish(
+      js,
+      "get.msg.bar",
+      <<"hello bar">>,
+      jetstream.default_publish_options(),
+    )
+  assert ack2.seq == 2
+
+  let assert Ok(ack3) =
+    jetstream.publish(
+      js,
+      "get.msg.foo",
+      <<"updated foo">>,
+      jetstream.default_publish_options(),
+    )
+  assert ack3.seq == 3
+
+  // Test get_message_by_seq
+  let assert Ok(msg) = jetstream.get_message_by_seq(js, stream_name, 1)
+  assert msg.sequence == 1
+  assert msg.subject == "get.msg.foo"
+  assert msg.payload == <<"hello foo">>
+
+  let assert Ok(msg2) = jetstream.get_message_by_seq(js, stream_name, 2)
+  assert msg2.sequence == 2
+  assert msg2.subject == "get.msg.bar"
+  assert msg2.payload == <<"hello bar">>
+
+  let assert Ok(msg3) = jetstream.get_message_by_seq(js, stream_name, 3)
+  assert msg3.sequence == 3
+  assert msg3.subject == "get.msg.foo"
+  assert msg3.payload == <<"updated foo">>
+
+  // Test get_last_message_by_subject - should return seq 3 for "get.msg.foo"
+  let assert Ok(last_msg) =
+    jetstream.get_last_message_by_subject(js, stream_name, "get.msg.foo")
+  assert last_msg.sequence == 3
+  assert last_msg.subject == "get.msg.foo"
+  assert last_msg.payload == <<"updated foo">>
+
+  // Test get_last_message_by_subject for "get.msg.bar" - should return seq 2
+  let assert Ok(bar_msg) =
+    jetstream.get_last_message_by_subject(js, stream_name, "get.msg.bar")
+  assert bar_msg.sequence == 2
+  assert bar_msg.subject == "get.msg.bar"
+  assert bar_msg.payload == <<"hello bar">>
+
+  // Test MessageNotFound for non-existent sequence
+  let assert Error(jetstream.MessageNotFound) =
+    jetstream.get_message_by_seq(js, stream_name, 999)
+
+  let assert Ok(_) = jetstream.delete_stream(js, stream_name)
+}

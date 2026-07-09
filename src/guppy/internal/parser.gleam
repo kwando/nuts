@@ -211,7 +211,9 @@ fn with_int(
   }
 }
 
-fn parse_headers(headers: BitArray) {
+pub fn parse_headers(
+  headers: BitArray,
+) -> Result(List(#(String, String)), Nil) {
   case bit_array.to_string(headers) {
     Ok(headers) ->
       case string.split(headers |> string.trim_end, "\r\n") {
