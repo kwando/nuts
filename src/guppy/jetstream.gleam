@@ -652,6 +652,7 @@ pub type ConsumerConfig {
     idle_heartbeat: Option(Duration),
     ratelimit: Option(Int),
     headers_only: Bool,
+    mem_storage: Bool,
   )
 }
 
@@ -674,6 +675,7 @@ pub fn default_consumer_config() -> ConsumerConfig {
     idle_heartbeat: None,
     ratelimit: None,
     headers_only: False,
+    mem_storage: False,
   )
 }
 
@@ -790,6 +792,7 @@ pub fn consumer_create_request(
               #("ack_policy", ack_policy_to_json(config.ack_policy)),
               #("replay_policy", replay_policy_to_json(config.replay_policy)),
               #("max_deliver", json.int(config.max_deliver)),
+              #("mem_storage", json.bool(False)),
             ])
             |> optional_field("description", config.description, json.string)
             |> optional_field("ack_wait", config.ack_wait, duration_to_json)
@@ -988,6 +991,7 @@ fn consumer_config_decoder() -> Decoder(ConsumerConfig) {
     decode.optional(decode.int),
   )
   use headers_only <- decode.optional_field("headers_only", False, decode.bool)
+  use mem_storage <- decode.optional_field("headers_only", False, decode.bool)
   decode.success(ConsumerConfig(
     description:,
     durable: durable_name != None,
@@ -1006,6 +1010,7 @@ fn consumer_config_decoder() -> Decoder(ConsumerConfig) {
     idle_heartbeat:,
     ratelimit:,
     headers_only:,
+    mem_storage:,
   ))
 }
 
@@ -1084,7 +1089,7 @@ fn deliver_policy_to_json(policy: DeliverPolicy) -> List(#(String, json.Json)) {
       #("opt_start_seq", json.int(seq)),
     ]
     DeliverByStartTime(timestamp) -> [
-      #("deliver_policy", json.string("last")),
+      #("deliver_policy", json.string("by_start_time")),
       #(
         "opt_start_time",
         json.string(timestamp.to_rfc3339(timestamp, calendar.utc_offset)),

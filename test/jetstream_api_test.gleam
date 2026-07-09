@@ -182,6 +182,7 @@ pub fn all_optional_fields_test() {
       idle_heartbeat: Some(duration.seconds(10)),
       ratelimit: Some(1_000_000),
       headers_only: True,
+      mem_storage: False,
     )
   let msg =
     jetstream.consumer_create_request(
@@ -211,6 +212,7 @@ pub fn all_optional_fields_test() {
   assert parsed.config.idle_heartbeat == Some(10_000_000_000)
   assert parsed.config.ratelimit == Some(1_000_000)
   assert parsed.config.headers_only == True
+  assert parsed.config.mem_storage == False
 }
 
 pub fn ephemeral_omits_durable_name_test() {
@@ -322,6 +324,7 @@ type DecodedConfig {
     idle_heartbeat: Option(Int),
     ratelimit: Option(Int),
     headers_only: Bool,
+    mem_storage: Bool,
   )
 }
 
@@ -402,6 +405,7 @@ fn config_decoder() -> decode.Decoder(DecodedConfig) {
     decode.optional(decode.int),
   )
   use headers_only <- decode.optional_field("headers_only", False, decode.bool)
+  use mem_storage <- decode.optional_field("mem_storage", False, decode.bool)
   decode.success(DecodedConfig(
     durable_name:,
     description:,
@@ -421,5 +425,6 @@ fn config_decoder() -> decode.Decoder(DecodedConfig) {
     idle_heartbeat:,
     ratelimit:,
     headers_only:,
+    mem_storage:,
   ))
 }

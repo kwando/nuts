@@ -1122,6 +1122,7 @@ pub fn list_with_watcher(bucket: Bucket) {
           "$KV." <> bucket.name <> ".>",
         ]),
         durable: False,
+        mem_storage: True,
       ),
     )
 
