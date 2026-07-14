@@ -38,7 +38,7 @@ pub fn bad_server_test() {
     nats.new("127.0.0.1", 47_921)
     |> nats.start()
 
-  assert !test_utils.await_connected(conn, 5) as "should not be connected"
+  let assert Error(Nil) = nats.await_connected(conn, 1000)
 
   let assert Ok(sub) = nats.subscribe(conn, "foo")
     as "should be able to subscribe when server is offline"
@@ -53,7 +53,7 @@ pub fn nkey_authorization_test() {
     )
 
   let assert Ok(Started(_, nats_conn)) = nats.start(options)
-  assert test_utils.await_connected(nats_conn, 5) as "not connected to NATS"
+  let assert Ok(_) = nats.await_connected(nats_conn, 1000)
 }
 
 pub fn user_pass_authorization_test() {
@@ -63,7 +63,7 @@ pub fn user_pass_authorization_test() {
     |> nats.password("secret")
 
   let assert Ok(Started(_, nats_conn)) = nats.start(options)
-  assert test_utils.await_connected(nats_conn, 5) as "not connected to NATS"
+  let assert Ok(_) = nats.await_connected(nats_conn, 1000)
 }
 
 pub fn invalid_user_pass_authorization_test() {
@@ -73,7 +73,7 @@ pub fn invalid_user_pass_authorization_test() {
     |> nats.password("wrongpassword")
 
   let assert Ok(Started(_, nats_conn)) = nats.start(options)
-  assert !test_utils.await_connected(nats_conn, 10) as "connected to NATS"
+  let assert Error(Nil) = nats.await_connected(nats_conn, 1000)
 }
 
 pub fn request_reply_test() {
@@ -164,7 +164,7 @@ pub fn named_connection_test() {
     |> nats.start()
 
   let conn = process.named_subject(name)
-  assert test_utils.await_connected(conn, 10) as "should be connected"
+  let assert Ok(_) = nats.await_connected(conn, 1000)
 }
 
 pub fn ping_keeps_connection_alive_test() {
@@ -174,7 +174,7 @@ pub fn ping_keeps_connection_alive_test() {
     |> nats.with_ping_timeout(100)
 
   let assert Ok(Started(_, conn)) = nats.start(options)
-  assert test_utils.await_connected(conn, 10)
+  let assert Ok(_) = nats.await_connected(conn, 1000)
 
   process.sleep(3000)
 

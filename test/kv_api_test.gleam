@@ -289,7 +289,7 @@ pub fn bucket_crud_test() {
   let assert Ok(actor.Started(_, conn)) =
     nats.new(test_utils.nats_host, test_utils.nats_port)
     |> nats.start()
-  assert test_utils.await_connected(conn, 100)
+  let assert Ok(_) = nats.await_connected(conn, 1000)
   let ctx = kv.new_context(conn)
 
   // List should work (empty or not)
@@ -317,7 +317,7 @@ pub fn list_keys_test() {
   let assert Ok(actor.Started(_, conn)) =
     nats.new(test_utils.nats_host, test_utils.nats_port)
     |> nats.start()
-  assert test_utils.await_connected(conn, 100)
+  let assert Ok(_) = nats.await_connected(conn, 1000)
   let ctx = kv.new_context(conn)
 
   // Delete any leftover bucket so we start fresh
@@ -358,7 +358,7 @@ pub fn bucket_not_found_test() {
   let assert Ok(actor.Started(_, conn)) =
     nats.new(test_utils.nats_host, test_utils.nats_port)
     |> nats.start()
-  assert test_utils.await_connected(conn, 100)
+  let assert Ok(_) = nats.await_connected(conn, 1000)
   let ctx = kv.new_context(conn)
 
   let assert Error(kv.BucketNotFound) =

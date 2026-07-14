@@ -1355,3 +1355,16 @@ pub fn default_logger(context: String) {
   let output = add_context(stderr_log, context)
   Logger(info: output, debug: output, warning: output)
 }
+
+/// Wait until the client is connected or the timeout expires.
+pub fn await_connected(conn: Subject(Message), timeout: Int) {
+  case is_connected(conn), timeout <= 0 {
+    True, _ -> Ok(conn)
+    _, True -> Error(Nil)
+    _, False -> {
+      let sleep_time = 200
+      process.sleep(sleep_time)
+      await_connected(conn, timeout - sleep_time)
+    }
+  }
+}

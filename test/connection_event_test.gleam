@@ -15,7 +15,7 @@ pub fn closed_event_test() {
     |> nats.on_connection_event(process.send(event_subject, _))
 
   let assert Ok(Started(_, conn)) = nats.start(options)
-  assert test_utils.await_connected(conn, 10)
+  let assert Ok(_) = nats.await_connected(conn, 1000)
 
   let assert Ok(nats.Connected) = process.receive(event_subject, 1000)
     as "should receive Connected event"
