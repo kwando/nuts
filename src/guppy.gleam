@@ -631,17 +631,26 @@ fn handle_subscribe(
         state
         |> update_subscribers(add_subscriber(_, subscriber))
 
-      case send_bits(state, protocol.encode_sub(subject:, sid:, queue_group:)) {
-        Ok(Nil) -> {
-          actor.continue(state)
-        }
-        Error(err) -> {
-          state.logger.warning(
-            "failed setup subscription on server: " <> string.inspect(err),
-          )
-          state
-          |> close_connection()
-          |> actor.continue
+      case state.authorized {
+        // We are not authorized yet. Actual subscription on the NATS server will
+        // be set up by the resubscribe operation.
+        False -> actor.continue(state)
+        True -> {
+          case
+            send_bits(state, protocol.encode_sub(subject:, sid:, queue_group:))
+          {
+            Ok(Nil) -> {
+              actor.continue(state)
+            }
+            Error(err) -> {
+              state.logger.warning(
+                "failed setup subscription on server: " <> string.inspect(err),
+              )
+              state
+              |> close_connection()
+              |> actor.continue
+            }
+          }
         }
       }
     }
@@ -658,8 +667,8 @@ fn handle_publish(
   msg: NatsMessage,
   reply: Subject(Result(Nil, NatsError)),
 ) -> actor.Next(ClientState, a) {
-  case state.socket {
-    Some(_) -> {
+  case state.socket, state.authorized {
+    Some(_), True -> {
       let bytes = encode_message(msg)
       case send_bits(state, bytes) {
         Ok(_) -> {
@@ -674,7 +683,7 @@ fn handle_publish(
         }
       }
     }
-    None -> {
+    _, _ -> {
       actor.send(reply, Error(NotConnected))
       actor.continue(state)
     }
