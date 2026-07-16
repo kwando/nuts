@@ -78,7 +78,7 @@ pub fn start(
 ) -> Result(actor.Started(Nil), actor.StartError) {
   let inbox_prefix = "consumer." <> nats.random_string(10) <> "."
   actor.new_with_initialiser(1000, fn(self) {
-    let assert Ok(subscription) = nats.subscribe(conn, inbox_prefix <> "*")
+    let assert Ok(#(subject, _)) = nats.subscribe(conn, inbox_prefix <> "*")
 
     process.send(self, Poll(max_messages))
 
@@ -99,7 +99,7 @@ pub fn start(
     ))
     |> actor.selecting(
       process.new_selector()
-      |> process.select_map(nats.get_subject(subscription), NatsMessage)
+      |> process.select_map(subject, NatsMessage)
       |> process.select(self),
     )
     |> Ok

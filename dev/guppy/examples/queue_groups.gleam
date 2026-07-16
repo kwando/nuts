@@ -7,7 +7,7 @@ import guppy/jetstream/simple_consumer
 
 pub fn main() {
   let assert Ok(conn) =
-    guppy.new("10.0.0.7", 4222)
+    guppy.new("100.85.25.88", 4222)
     |> guppy.start
 
   let conn = conn.data
@@ -15,6 +15,7 @@ pub fn main() {
   process.sleep(500)
 
   let js_ctx = jetstream.new_context(conn)
+
   let stream_name = "guppy-work-queue"
   create_stream(js_ctx, stream_name)
 

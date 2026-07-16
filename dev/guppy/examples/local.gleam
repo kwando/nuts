@@ -18,9 +18,9 @@ pub fn main() {
       |> guppy.with_ping_timeout(10_000),
     )
 
-  let assert Ok(me) = guppy.subscribe(nats, ">")
+  let assert Ok(#(me, _)) = guppy.subscribe(nats, ">")
 
-  loop(me |> guppy.get_subject)
+  loop(me)
 }
 
 fn loop(subject: process.Subject(guppy.NatsMessage)) {

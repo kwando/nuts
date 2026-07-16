@@ -9,9 +9,9 @@ pub fn main() {
   let assert Ok(actor.Started(_, conn)) =
     guppy.start(guppy.new("100.121.244.19", 4222))
 
-  let assert Ok(me) = guppy.subscribe(conn, "naboo.victron")
+  let assert Ok(#(me, _)) = guppy.subscribe(conn, "naboo.victron")
 
-  loop(me |> guppy.get_subject)
+  loop(me)
 }
 
 fn loop(subject: process.Subject(guppy.NatsMessage)) {

@@ -1143,7 +1143,7 @@ pub fn publish(
 pub fn subscribe(
   conn: Subject(Message),
   nats_subject: String,
-) -> Result(Subscription, NatsError) {
+) -> Result(#(Subject(NatsMessage), Subscription), NatsError) {
   let subscriber = process.new_subject()
   actor.call(conn, actor_timeout, Subscribe(
     nats_subject,
@@ -1151,6 +1151,7 @@ pub fn subscribe(
     reply: _,
     queue_group: None,
   ))
+  |> result.map(fn(subscription) { #(subscriber, subscription) })
 }
 
 /// Subscribe to a subject as part of a named queue group.
@@ -1161,7 +1162,7 @@ pub fn subscribe_with_queue_group(
   conn: Subject(Message),
   nats_subject: String,
   queue_group: String,
-) -> Result(Subscription, NatsError) {
+) -> Result(#(Subject(NatsMessage), Subscription), NatsError) {
   let subscriber = process.new_subject()
   actor.call(conn, actor_timeout, Subscribe(
     nats_subject,
@@ -1169,6 +1170,7 @@ pub fn subscribe_with_queue_group(
     reply: _,
     queue_group: Some(queue_group),
   ))
+  |> result.map(fn(subscription) { #(subscriber, subscription) })
 }
 
 /// Unsubscribe from a subject.

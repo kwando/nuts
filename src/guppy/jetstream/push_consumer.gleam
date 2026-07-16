@@ -87,7 +87,7 @@ pub fn start(
       }
     {
       Ok(subscription) -> {
-        let handler_subject = nats.get_subject(subscription)
+        let handler_subject = subscription.0
         actor.initialised(PushConsumerState(
           self:,
           handler:,

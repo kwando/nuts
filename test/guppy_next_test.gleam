@@ -11,8 +11,8 @@ pub fn integration_test() {
     nats.new_message("foo", <<"foo">>)
     |> nats.publish(conn, _)
 
-  let assert Ok(message_subject) = nats.subscribe(conn, "foo")
-  let assert Ok(message_subject2) = nats.subscribe(conn, "foo")
+  let assert Ok(#(message_subject, _sub)) = nats.subscribe(conn, "foo")
+  let assert Ok(#(message_subject2, _sub2)) = nats.subscribe(conn, "foo")
 
   let assert Ok(_) =
     nats.new_message("foo", <<"bar">>)
@@ -23,13 +23,13 @@ pub fn integration_test() {
     |> nats.reply_to(Some("INBOX-2387131"))
     |> nats.publish(conn, _)
 
-  let assert Ok(_) = process.receive(message_subject |> nats.get_subject, 1000)
+  let assert Ok(_) = process.receive(message_subject, 1000)
     as "message not received"
-  let assert Ok(_) = process.receive(message_subject |> nats.get_subject, 1000)
+  let assert Ok(_) = process.receive(message_subject, 1000)
     as "message not received"
-  let assert Ok(_) = process.receive(message_subject2 |> nats.get_subject, 1000)
+  let assert Ok(_) = process.receive(message_subject2, 1000)
     as "message not received"
-  let assert Ok(_) = process.receive(message_subject2 |> nats.get_subject, 1000)
+  let assert Ok(_) = process.receive(message_subject2, 1000)
     as "message not received"
 }
 
@@ -40,7 +40,7 @@ pub fn bad_server_test() {
 
   let assert Error(Nil) = nats.await_connected(conn, 1000)
 
-  let assert Ok(sub) = nats.subscribe(conn, "foo")
+  let assert Ok(#(_, sub)) = nats.subscribe(conn, "foo")
     as "should be able to subscribe when server is offline"
   let assert Ok(Nil) = nats.unsubscribe(conn, sub)
 }
@@ -81,8 +81,7 @@ pub fn request_reply_test() {
 
   let echo_ready = process.new_subject()
   process.spawn(fn() {
-    let assert Ok(service_sub) = nats.subscribe(conn, "echo")
-    let service_subject = nats.get_subject(service_sub)
+    let assert Ok(#(service_subject, _)) = nats.subscribe(conn, "echo")
     process.send(echo_ready, True)
     echo_service(conn, service_subject)
   })
@@ -142,9 +141,8 @@ pub fn request_not_connected_test() {
 pub fn subscribe_with_queue_group_test() {
   use conn <- test_utils.with_client()
 
-  let assert Ok(sub) =
+  let assert Ok(#(sub_subject, _sub)) =
     nats.subscribe_with_queue_group(conn, "queue.test", "my-group")
-  let sub_subject = nats.get_subject(sub)
 
   let assert Ok(_) =
     nats.new_message("queue.test", <<"queue message">>)

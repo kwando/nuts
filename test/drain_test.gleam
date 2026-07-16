@@ -13,8 +13,7 @@ pub fn drain_subscription_test() {
   let assert Ok(nats.Connected) = process.receive(event_subject, 5000)
     as "should be connected"
 
-  let assert Ok(sub) = nats.subscribe(conn, "drain.test")
-  let subject = nats.get_subject(sub)
+  let assert Ok(#(subject, sub)) = nats.subscribe(conn, "drain.test")
 
   let assert Ok(_) =
     nats.new_message("drain.test", <<"first">>)
@@ -45,8 +44,7 @@ pub fn drain_connection_test() {
   let assert Ok(nats.Connected) = process.receive(event_subject, 5000)
     as "should be connected"
 
-  let assert Ok(sub) = nats.subscribe(conn, "drain.conn")
-  let subject = nats.get_subject(sub)
+  let assert Ok(#(subject, _sub)) = nats.subscribe(conn, "drain.conn")
 
   let assert Ok(_) =
     nats.new_message("drain.conn", <<"hello">>)
